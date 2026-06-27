@@ -223,9 +223,18 @@ FEWSHOT_EXAMPLE = """\
 """
 
 
-def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None) -> str:
-    """달력 골격 + 허용 메뉴 풀 + 규칙 리마인드를 담은 사용자 프롬프트."""
+def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction: str = "") -> str:
+    """달력 골격 + 허용 메뉴 풀 + 규칙 리마인드를 담은 사용자 프롬프트.
+
+    correction: 직전 결과의 규칙 위반 목록(있으면 재생성 보정 지시로 덧붙임).
+    """
     pool = pool or default_pool()
+    fix_block = ""
+    if correction:
+        fix_block = (
+            "\n\n[직전 결과에서 아래 규칙 위반이 발견되었습니다. 반드시 모두 고쳐 다시 생성하세요]\n"
+            f"{correction}\n"
+        )
     return (
         f"{FEWSHOT_EXAMPLE}\n"
         f"위 형식을 그대로 따라 '{plan.title}' 식단표를 생성하세요.\n\n"
@@ -236,6 +245,7 @@ def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None) -> str:
         f"{render_template_hint(plan)}\n\n"
         f"모든 비즈니스 규칙(6개 메뉴/김치류/생선 4회 이하/후라이드치킨 2회/쭈꾸미 1~2회/"
         f"4일 중복금지 등)을 반드시 준수하세요."
+        f"{fix_block}"
     )
 
 
@@ -251,10 +261,12 @@ def generate_menu(
     temperature: float = 0.8,
     closed_days: set[int] | None = None,
     pool: MenuPool | None = None,
+    correction: str = "",
 ) -> str:
     """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다.
 
     closed_days: 예외 휴무일(일자 집합). pool: 허용 메뉴 풀(미지정 시 시드 사용).
+    correction: 재생성 보정 지시(규칙 위반 목록).
     """
     # 신규 google-genai SDK 사용 (from google import genai)
     from google import genai
@@ -262,14 +274,14 @@ def generate_menu(
 
     api_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        raise RuntimeError("환경변수 GEMINI_API_KEY (또는 GOOGLE_API_KEY) 가 필요합니다.")
+        raise RuntimeError("Gemini API 키가 필요합니다. (환경변수 GEMINI_API_KEY 또는 설정에서 입력)")
 
     plan = build_month_plan(year, month, closed_days=closed_days)
     client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
         model=model,
-        contents=build_user_prompt(plan, pool=pool),
+        contents=build_user_prompt(plan, pool=pool, correction=correction),
         config=types.GenerateContentConfig(
             # 데이터 정형성을 위한 System Instruction 설정 부분
             system_instruction=SYSTEM_INSTRUCTION,
@@ -278,6 +290,46 @@ def generate_menu(
         ),
     )
     return (response.text or "").strip()
+
+
+def generate_validated_menu(
+    year: int,
+    month: int,
+    model: str = "gemini-2.5-flash",
+    api_key: str | None = None,
+    temperature: float = 0.8,
+    closed_days: set[int] | None = None,
+    pool: MenuPool | None = None,
+    max_retries: int = 2,
+    progress=None,
+) -> tuple[str, list[str]]:
+    """검증을 통과할 때까지(최대 max_retries회) 재생성한다.
+
+    반환: (식단표 텍스트, 남은 위반 목록).  위반이 비어 있으면 완전 통과.
+    progress: 진행 상황을 받을 콜백 (예: GUI 상태표시). progress(str) 형태.
+    """
+    correction = ""
+    text = ""
+    errors: list[str] = []
+    for attempt in range(1, max_retries + 2):  # 최초 1회 + 재시도 max_retries회
+        if progress:
+            progress(f"식단표 생성 중... (시도 {attempt})")
+        text = generate_menu(
+            year, month, model=model, api_key=api_key, temperature=temperature,
+            closed_days=closed_days, pool=pool, correction=correction,
+        )
+        errors = validate_menu(text)
+        if not errors:
+            if progress:
+                progress("완료: 모든 규칙 통과")
+            return text, []
+        # 위반을 보정 지시로 만들어 다음 시도에 반영
+        correction = "\n".join(f"- {e}" for e in errors)
+        if progress:
+            progress(f"규칙 위반 {len(errors)}건 → 보정 후 재생성")
+    if progress:
+        progress(f"완료(일부 규칙 미충족 {len(errors)}건)")
+    return text, errors
 
 
 # ----------------------------------------------------------------------------

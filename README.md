@@ -9,7 +9,32 @@
 운영일은 **소방서 배달 특성상 매일(평일/주말/공휴일)** 생성하며, 설날·추석 등 예외 휴무는
 `--closed-days` 로 제외합니다.
 
-## 설치 & 실행
+## 🖥 Windows 데스크톱 프로그램 (어르신용 GUI)
+
+큰 글씨·큰 버튼의 단순 화면으로 누구나 식단표를 만들 수 있습니다.
+
+- **연/월 선택 → [식단표 만들기] → 화면에서 수정 → 저장/복사/인쇄**
+- **API 키는 [설정]에서 한 번만 입력**하면 PC(`%APPDATA%\MenuPlanner\config.json`)에 저장되어 자동 사용
+- 저장: 엑셀(.xlsx)·텍스트(.txt) / 복사: 클립보드 / 인쇄: 기본 프린터
+- 생성 시 규칙 위반은 **자동 재생성(최대 2회)** 으로 보정
+
+```bash
+# 개발자 실행(파이썬)
+pip install -r requirements.txt
+python gui.py
+```
+
+### .exe 빌드 (배포용)
+
+**① GitHub Actions(권장)** — `Actions` 탭 → `Build Windows EXE` → `Run workflow`
+실행 후 산출물(`MenuPlanner-windows`)에서 `MenuPlanner.exe` 다운로드. (브랜치 푸시 시 자동 실행)
+
+**② 내 Windows PC에서 직접** — 저장소를 받은 뒤 `build_windows.bat` 더블클릭 →
+`dist\MenuPlanner.exe` 생성.
+
+> 최종 사용자는 `.exe` 하나만 받으면 됩니다(파이썬 설치 불필요). 첫 실행 시 [설정]에서 키만 등록.
+
+## CLI 설치 & 실행
 
 ```bash
 pip install -r requirements.txt
