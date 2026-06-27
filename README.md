@@ -4,6 +4,11 @@
 식단표를 Gemini API로 생성합니다. 모든 비즈니스 규칙을 **System Instruction + Few-shot**
 으로 주입하고, 생성 결과를 **코드 레벨 Validation**으로 2차 검증합니다.
 
+**하이브리드 전략**: 메뉴 마스터 데이터(`menu_data.py`)를 코드에 **시드 풀**로 두고
+이를 Gemini에 '허용 어휘'로 전달해 변동성·원가를 통제하며, 부족하면 동일 스타일로 보충합니다.
+운영일은 **소방서 배달 특성상 매일(평일/주말/공휴일)** 생성하며, 설날·추석 등 예외 휴무는
+`--closed-days` 로 제외합니다.
+
 ## 설치 & 실행
 
 ```bash
@@ -16,7 +21,10 @@ python menu_planner.py 2026 7
 # 모델 변경
 python menu_planner.py 2026 7 --model gemini-2.5-flash
 
-# API 호출 없이 달력 골격/프롬프트만 확인
+# 예외 휴무일 제외 (예: 설날 연휴 2/16~18)
+python menu_planner.py 2026 2 --closed-days 16,17,18
+
+# API 호출 없이 달력 골격/메뉴 풀/프롬프트만 확인
 python menu_planner.py 2026 7 --dry-run
 ```
 

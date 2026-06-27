@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Iterable
 
+from menu_data import MenuPool, default_pool, render_pool_for_prompt
+
 # ----------------------------------------------------------------------------
 # 0. 도메인 상수 (규칙 검증 및 프롬프트 주입에 공통 사용)
 # ----------------------------------------------------------------------------
@@ -75,6 +77,9 @@ class DaySlot:
     is_weekend: bool
     is_holiday: bool
     holiday_name: str | None = None
+    # 소방서 배달 특성상 기본적으로 매일 운영(휴무 없음).
+    # 설날·추석 등 예외 휴무는 추후 이 플래그를 False 로 세팅해 제외 처리.
+    is_operating: bool = True
 
     @property
     def weekday_kr(self) -> str:
@@ -103,11 +108,19 @@ class MonthPlan:
         return f"{self.year}년 {self.month}월"
 
 
-def build_month_plan(year: int, month: int) -> MonthPlan:
-    """연/월을 받아 해당 월의 모든 날짜에 대한 템플릿 구조를 생성한다."""
+def build_month_plan(
+    year: int, month: int, closed_days: set[int] | None = None
+) -> MonthPlan:
+    """연/월을 받아 해당 월의 모든 날짜에 대한 템플릿 구조를 생성한다.
+
+    소방서 배달 특성상 기본적으로 매일(평일/주말/공휴일) 운영한다.
+    설날·추석 등 예외 휴무가 필요하면 closed_days 에 '일(day)' 집합을 넘긴다.
+    (예: closed_days={17, 18} -> 17·18일 식단 제외)
+    """
     if not (1 <= month <= 12):
         raise ValueError(f"잘못된 월: {month}")
 
+    closed_days = closed_days or set()
     _, last_day = calendar.monthrange(year, month)
     plan = MonthPlan(year=year, month=month)
 
@@ -121,6 +134,7 @@ def build_month_plan(year: int, month: int) -> MonthPlan:
                 is_weekend=is_weekend,
                 is_holiday=holiday_name is not None,
                 holiday_name=holiday_name,
+                is_operating=day not in closed_days,
             )
         )
     return plan
@@ -130,6 +144,8 @@ def render_template_hint(plan: MonthPlan) -> str:
     """모델에게 '채워야 할 날짜 골격'과 날짜별 속성(주말/공휴일/조리편의)을 전달."""
     lines: list[str] = []
     for s in plan.days:
+        if not s.is_operating:
+            continue  # 예외 휴무일은 골격에서 제외
         tags = []
         if s.is_holiday:
             tags.append(f"공휴일:{s.holiday_name}")
@@ -174,15 +190,23 @@ SYSTEM_INSTRUCTION = f"""\
 
 [맛/조리 편의]
 11. 점심(중식)은 자극적이고 든든한 맛, 저녁(석식)은 깔끔하고 담백한 맛으로 배치.
-12. 저녁/주말/공휴일은 조리가 용이한 메뉴 위주로 배치.
+12. 저녁/주말/공휴일은 조리가 용이한 메뉴(난이도 낮음) 위주로 배치.
+
+[운영일]
+13. 소방서 배달 특성상 평일/주말/공휴일 '모든 운영일'에 중식·석식을 빠짐없이 편성한다.
+    (휴무일은 입력 골격에서 이미 제외되어 전달되므로, 전달된 날짜는 전부 채운다.)
+
+[메뉴 선택]
+14. 아래 '허용 메뉴 풀' 위주로 선택하고 각 메뉴의 속성/제한(끼니, 평일만, 월최대 등)을 지킨다.
+    풀로 다양성이 부족할 때만 동일 스타일의 한식 메뉴로 보충한다.
 
 [출력 포맷] (조사/불필요한 줄바꿈 없이, 날짜 사이 빈 줄 없음)
 [중식]
 M/D(요일): 메인, 반찬, 반찬, 반찬, {KIMCHI_LABEL}, 국
-... (해당 월의 모든 평일 날짜)
+... (전달된 모든 운영일)
 [석식]
 M/D(요일): 메인, 반찬, 반찬, 반찬, {KIMCHI_LABEL}, 국
-... (해당 월의 모든 평일 날짜)
+... (전달된 모든 운영일)
 
 설명/머리말/코드블록 표시(```) 없이 식단표 텍스트만 출력하세요.
 """
@@ -199,13 +223,16 @@ FEWSHOT_EXAMPLE = """\
 """
 
 
-def build_user_prompt(plan: MonthPlan) -> str:
-    """달력 골격 + 규칙 리마인드를 담은 사용자 프롬프트."""
+def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None) -> str:
+    """달력 골격 + 허용 메뉴 풀 + 규칙 리마인드를 담은 사용자 프롬프트."""
+    pool = pool or default_pool()
     return (
         f"{FEWSHOT_EXAMPLE}\n"
-        f"위 형식을 그대로 따라 '{plan.title}' 식단표를 생성하세요.\n"
-        f"아래는 채워야 할 날짜 골격입니다(각 날짜 속성 포함). 평일 위주로 편성하되, "
-        f"주말/공휴일이 운영일이면 조리 용이 메뉴로 채우고, 휴무일이면 제외하세요.\n\n"
+        f"위 형식을 그대로 따라 '{plan.title}' 식단표를 생성하세요.\n\n"
+        f"{render_pool_for_prompt(pool)}\n\n"
+        f"아래는 채워야 할 운영일 골격입니다(각 날짜 속성 포함). "
+        f"전달된 날짜는 전부 중식·석식을 채우고, '조리용이메뉴' 태그가 붙은 날은 "
+        f"난이도 낮은 메뉴로 배치하세요.\n\n"
         f"{render_template_hint(plan)}\n\n"
         f"모든 비즈니스 규칙(6개 메뉴/김치류/생선 4회 이하/후라이드치킨 2회/쭈꾸미 1~2회/"
         f"4일 중복금지 등)을 반드시 준수하세요."
@@ -222,8 +249,13 @@ def generate_menu(
     model: str = "gemini-2.5-pro",
     api_key: str | None = None,
     temperature: float = 0.8,
+    closed_days: set[int] | None = None,
+    pool: MenuPool | None = None,
 ) -> str:
-    """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다."""
+    """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다.
+
+    closed_days: 예외 휴무일(일자 집합). pool: 허용 메뉴 풀(미지정 시 시드 사용).
+    """
     # 신규 google-genai SDK 사용 (from google import genai)
     from google import genai
     from google.genai import types
@@ -232,12 +264,12 @@ def generate_menu(
     if not api_key:
         raise RuntimeError("환경변수 GEMINI_API_KEY (또는 GOOGLE_API_KEY) 가 필요합니다.")
 
-    plan = build_month_plan(year, month)
+    plan = build_month_plan(year, month, closed_days=closed_days)
     client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
         model=model,
-        contents=build_user_prompt(plan),
+        contents=build_user_prompt(plan, pool=pool),
         config=types.GenerateContentConfig(
             # 데이터 정형성을 위한 System Instruction 설정 부분
             system_instruction=SYSTEM_INSTRUCTION,
@@ -367,20 +399,26 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--model", default="gemini-2.5-pro",
                         choices=["gemini-2.5-pro", "gemini-2.5-flash"])
     parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--closed-days", default="",
+                        help="예외 휴무일(쉼표구분 일자). 예: --closed-days 17,18 (설날 등)")
     parser.add_argument("--dry-run", action="store_true",
                         help="API 호출 없이 달력 골격/프롬프트만 출력")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    plan = build_month_plan(args.year, args.month)
+    closed_days = {int(x) for x in args.closed_days.split(",") if x.strip()}
+    plan = build_month_plan(args.year, args.month, closed_days=closed_days)
 
     if args.dry_run:
-        print(f"=== {plan.title} 템플릿 골격 ===")
+        print(f"=== {plan.title} 운영일 골격 ===")
         print(render_template_hint(plan))
-        print("\n=== System Instruction (발췌) ===")
+        print("\n=== 허용 메뉴 풀 ===")
+        print(render_pool_for_prompt(default_pool()))
+        print("\n=== System Instruction ===")
         print(SYSTEM_INSTRUCTION)
         return 0
 
-    text = generate_menu(args.year, args.month, model=args.model, temperature=args.temperature)
+    text = generate_menu(args.year, args.month, model=args.model,
+                         temperature=args.temperature, closed_days=closed_days)
     print(text)
 
     errors = validate_menu(text)
