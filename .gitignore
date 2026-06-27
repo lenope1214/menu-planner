@@ -1,0 +1,10 @@
+# 비밀키/환경변수 — 절대 커밋 금지
+.env
+.env.*
+*.key
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

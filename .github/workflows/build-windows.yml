@@ -1,0 +1,44 @@
+name: Build Windows EXE
+
+# 수동 실행(Actions 탭의 "Run workflow") 또는 브랜치 푸시 시 빌드
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "claude/**"
+    paths:
+      - "**.py"
+      - "requirements.txt"
+      - ".github/workflows/build-windows.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: EXE 빌드 (단일 파일, 콘솔창 없음)
+        run: >
+          pyinstaller --noconfirm --onefile --windowed
+          --name MenuPlanner
+          --collect-all google.genai
+          gui.py
+
+      - name: 산출물 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: MenuPlanner-windows
+          path: dist/MenuPlanner.exe
+          if-no-files-found: error
