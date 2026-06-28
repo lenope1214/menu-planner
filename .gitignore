@@ -2,6 +2,13 @@
 .env
 .env.*
 *.key
+# API 키가 저장되는 로컬 설정 파일(키 포함 — 백업/임시본까지 금지)
+config.json
+config.json.bak
+config.json.tmp
+# 사용자 메뉴/조건 데이터(런타임 생성)
+menu_pool.json
+conditions.json
 
 # Python
 __pycache__/
