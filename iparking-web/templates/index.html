@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>아이파킹 스토어 자동화</title>
+  <style>
+    :root { --bg:#f4f6fb; --card:#fff; --line:#e3e7f0; --brand:#2b6ef2; --brand-d:#1d54c4;
+            --text:#1c2333; --muted:#6b7385; --ok:#137a4b; --err:#c0392b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:"Malgun Gothic","맑은 고딕",system-ui,sans-serif;
+           background:var(--bg); color:var(--text); }
+    .wrap { max-width:720px; margin:0 auto; padding:28px 18px 60px; }
+    h1 { font-size:22px; margin:8px 0 4px; }
+    .sub { color:var(--muted); font-size:14px; margin-bottom:22px; }
+    .steps { display:flex; gap:8px; margin-bottom:22px; }
+    .steps div { flex:1; text-align:center; font-size:13px; padding:8px 4px; border-radius:8px;
+                 background:#e9edf6; color:var(--muted); }
+    .steps div.on { background:var(--brand); color:#fff; font-weight:700; }
+    .steps div.done { background:#dff2e8; color:var(--ok); }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+            padding:22px; margin-bottom:18px; box-shadow:0 1px 3px rgba(20,30,60,.05); }
+    .card.hidden { display:none; }
+    label { display:block; font-size:14px; font-weight:600; margin:14px 0 6px; }
+    input { width:100%; padding:12px 13px; font-size:16px; border:1px solid var(--line);
+            border-radius:9px; outline:none; }
+    input:focus { border-color:var(--brand); }
+    button { width:100%; margin-top:18px; padding:13px; font-size:16px; font-weight:700;
+             color:#fff; background:var(--brand); border:0; border-radius:9px; cursor:pointer; }
+    button:hover { background:var(--brand-d); }
+    button:disabled { opacity:.55; cursor:default; }
+    button.ghost { background:#eef1f8; color:var(--brand-d); margin-top:10px; }
+    .msg { margin-top:14px; font-size:14px; min-height:18px; }
+    .msg.err { color:var(--err); }
+    .msg.ok  { color:var(--ok); }
+    .kv { font-size:14px; color:var(--muted); margin-top:6px; }
+    .kv b { color:var(--text); }
+    table { width:100%; border-collapse:collapse; margin-top:12px; font-size:14px; }
+    th,td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); }
+    th { color:var(--muted); font-weight:600; background:#fafbfe; }
+    .empty { color:var(--muted); padding:16px 4px; font-size:14px; }
+    .badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:12px;
+             background:#e8f0ff; color:var(--brand-d); }
+    details { margin-top:14px; } summary { cursor:pointer; color:var(--muted); font-size:13px; }
+    pre { background:#0f1424; color:#cfe0ff; padding:12px; border-radius:8px; overflow:auto;
+          font-size:12px; max-height:280px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>아이파킹 스토어 자동화</h1>
+    <div class="sub">주차장 코드 → 스토어 로그인 → 보유 할인권 조회</div>
+
+    <div class="steps">
+      <div id="s1" class="on">① 주차장 코드</div>
+      <div id="s2">② 스토어 로그인</div>
+      <div id="s3">③ 할인권 조회</div>
+    </div>
+
+    <!-- ① 주차장 코드 -->
+    <div class="card" id="card1">
+      <label for="lot">주차장 코드</label>
+      <input id="lot" placeholder="예: KOR00056422" autocomplete="off" />
+      <button id="btnLot">주차장 확인</button>
+      <div class="msg" id="msgLot"></div>
+    </div>
+
+    <!-- ② 스토어 로그인 -->
+    <div class="card hidden" id="card2">
+      <div class="kv">주차장: <b id="lotName">-</b></div>
+      <label for="acc">스토어 아이디</label>
+      <input id="acc" placeholder="예: exllub101" autocomplete="username" />
+      <label for="pw">비밀번호</label>
+      <input id="pw" type="password" autocomplete="current-password" />
+      <button id="btnLogin">로그인</button>
+      <button class="ghost" id="btnBack1">← 주차장 다시 선택</button>
+      <div class="msg" id="msgLogin"></div>
+    </div>
+
+    <!-- ③ 할인권 조회 -->
+    <div class="card hidden" id="card3">
+      <div class="kv">로그인: <b id="who">-</b> <span class="badge" id="lotBadge"></span></div>
+      <button id="btnTickets">보유 할인권 불러오기</button>
+      <div class="msg" id="msgTickets"></div>
+      <div id="ticketBox"></div>
+      <button class="ghost" id="btnLogout">로그아웃</button>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
