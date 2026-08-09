@@ -28,6 +28,7 @@ from datetime import date
 from typing import Iterable
 
 from menu_data import MenuPool, default_pool, render_pool_for_prompt
+import conditions as cond_mod
 
 # ----------------------------------------------------------------------------
 # 0. 도메인 상수 (규칙 검증 및 프롬프트 주입에 공통 사용)
@@ -223,29 +224,68 @@ FEWSHOT_EXAMPLE = """\
 """
 
 
-def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction: str = "") -> str:
-    """달력 골격 + 허용 메뉴 풀 + 규칙 리마인드를 담은 사용자 프롬프트.
+EXAMPLES_MAX_CHARS = 12000  # 예시 전체 주입 상한(토큰 절약)
 
-    correction: 직전 결과의 규칙 위반 목록(있으면 재생성 보정 지시로 덧붙임).
+
+def render_examples_prompt(examples: list | None) -> str:
+    """등록된 예시 식단표를 few-shot 스타일 참고 블록으로 직렬화."""
+    if not examples:
+        return ""
+    parts: list[str] = [
+        "[참고 식단표 예시]",
+        "아래는 실제로 쓰던 식단표입니다. 메뉴 이름 표기 방식, 반찬·국 조합, "
+        "전반적인 구성 스타일을 최대한 이 예시들과 비슷하게 맞추세요. "
+        "단, 날짜/요일은 요청한 달에 맞추고 아래 규칙은 반드시 지킵니다.",
+    ]
+    used = 0
+    for i, ex in enumerate(examples, start=1):
+        body = (ex.get("body") or "").strip() if isinstance(ex, dict) else str(ex).strip()
+        if not body:
+            continue
+        title = ex.get("title", f"예시 {i}") if isinstance(ex, dict) else f"예시 {i}"
+        chunk = f"--- 예시 {i}: {title} ---\n{body}"
+        if used + len(chunk) > EXAMPLES_MAX_CHARS:
+            chunk = chunk[: max(0, EXAMPLES_MAX_CHARS - used)]
+        parts.append(chunk)
+        used += len(chunk)
+        if used >= EXAMPLES_MAX_CHARS:
+            break
+    return "\n".join(parts)
+
+
+def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction: str = "",
+                      conditions: list | None = None, pool_only: bool = False,
+                      examples: list | None = None) -> str:
+    """달력 골격 + 허용 메뉴 풀 + 규칙/조건 + 예시(few-shot)를 담은 사용자 프롬프트.
+
+    correction: 직전 결과의 위반 목록(있으면 재생성 보정 지시로 덧붙임).
+    conditions: 사용자 조건 리스트. pool_only: 풀의 메뉴만 사용.
+    examples: 참고 식단표 예시(스타일 모방용).
     """
     pool = pool or default_pool()
     fix_block = ""
     if correction:
         fix_block = (
-            "\n\n[직전 결과에서 아래 규칙 위반이 발견되었습니다. 반드시 모두 고쳐 다시 생성하세요]\n"
+            "\n\n[직전 결과에서 아래 위반이 발견되었습니다. 반드시 모두 고쳐 다시 생성하세요]\n"
             f"{correction}\n"
         )
+    cond_block = cond_mod.conditions_prompt(conditions or [])
+    cond_block = ("\n\n" + cond_block) if cond_block else ""
+    pool_block = ("\n\n[메뉴 제한] 위 ‘허용 메뉴 풀’에 있는 메뉴만 사용하세요. "
+                  "풀에 없는 메인/반찬/국은 절대 만들지 마세요.") if pool_only else ""
+    ex_block = render_examples_prompt(examples)
+    ex_block = (ex_block + "\n\n") if ex_block else ""
     return (
         f"{FEWSHOT_EXAMPLE}\n"
         f"위 형식을 그대로 따라 '{plan.title}' 식단표를 생성하세요.\n\n"
-        f"{render_pool_for_prompt(pool)}\n\n"
+        f"{ex_block}"
+        f"{render_pool_for_prompt(pool)}{pool_block}\n\n"
         f"아래는 채워야 할 운영일 골격입니다(각 날짜 속성 포함). "
         f"전달된 날짜는 전부 중식·석식을 채우고, '조리용이메뉴' 태그가 붙은 날은 "
         f"난이도 낮은 메뉴로 배치하세요.\n\n"
         f"{render_template_hint(plan)}\n\n"
-        f"모든 비즈니스 규칙(6개 메뉴/김치류/생선 4회 이하/후라이드치킨 2회/쭈꾸미 1~2회/"
-        f"4일 중복금지 등)을 반드시 준수하세요."
-        f"{fix_block}"
+        f"기본 규칙(6개 메뉴/김치류 1개/같은 메인 4일 이내 금지)을 반드시 지키세요."
+        f"{cond_block}{fix_block}"
     )
 
 
@@ -262,11 +302,14 @@ def generate_menu(
     closed_days: set[int] | None = None,
     pool: MenuPool | None = None,
     correction: str = "",
+    conditions: list | None = None,
+    pool_only: bool = False,
+    examples: list | None = None,
 ) -> str:
     """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다.
 
     closed_days: 예외 휴무일(일자 집합). pool: 허용 메뉴 풀(미지정 시 시드 사용).
-    correction: 재생성 보정 지시(규칙 위반 목록).
+    correction: 재생성 보정 지시(규칙 위반 목록). examples: 스타일 참고 예시.
     """
     # 신규 google-genai SDK 사용 (from google import genai)
     from google import genai
@@ -281,7 +324,9 @@ def generate_menu(
 
     response = client.models.generate_content(
         model=model,
-        contents=build_user_prompt(plan, pool=pool, correction=correction),
+        contents=build_user_prompt(plan, pool=pool, correction=correction,
+                                   conditions=conditions, pool_only=pool_only,
+                                   examples=examples),
         config=types.GenerateContentConfig(
             # 데이터 정형성을 위한 System Instruction 설정 부분
             system_instruction=SYSTEM_INSTRUCTION,
@@ -302,6 +347,9 @@ def generate_validated_menu(
     pool: MenuPool | None = None,
     max_retries: int = 2,
     progress=None,
+    conditions: list | None = None,
+    pool_only: bool = False,
+    examples: list | None = None,
 ) -> tuple[str, list[str]]:
     """검증을 통과할 때까지(최대 max_retries회) 재생성한다.
 
@@ -317,8 +365,9 @@ def generate_validated_menu(
         text = generate_menu(
             year, month, model=model, api_key=api_key, temperature=temperature,
             closed_days=closed_days, pool=pool, correction=correction,
+            conditions=conditions, pool_only=pool_only, examples=examples,
         )
-        errors = validate_menu(text)
+        errors = validate_menu(text, conditions=conditions, pool=pool, pool_only=pool_only)
         if not errors:
             if progress:
                 progress("완료: 모든 규칙 통과")
@@ -384,14 +433,13 @@ def _day_index(date_label: str) -> int:
     return int(date_label.split("/")[1].split("(")[0])
 
 
-def validate_menu(text: str) -> list[str]:
-    """비즈니스 규칙 위반 목록을 반환한다(빈 리스트 = 통과)."""
+def validate_menu(text: str, conditions: list | None = None,
+                  pool: MenuPool | None = None, pool_only: bool = False) -> list[str]:
+    """규칙(형식) + 사용자 조건 + ‘추가 메뉴만’ 위반 목록(빈 리스트 = 통과)."""
     errors: list[str] = []
     meals = parse_menu_text(text)
     if not meals:
         return ["파싱된 식단 라인이 없습니다(출력 포맷 오류)."]
-
-    lunches = [m for m in meals if m.section == "중식"]
 
     # (1) 끼니별 6개 메뉴 + 김치류 정확히 1개
     for m in meals:
@@ -400,7 +448,7 @@ def validate_menu(text: str) -> list[str]:
         if m.items.count(KIMCHI_LABEL) != 1:
             errors.append(f"[{m.section} {m.date_label}] '{KIMCHI_LABEL}' 정확히 1개여야 함: {m.raw}")
 
-    # (4) 동일 메인 4일 이내 재등장 금지 (섹션별 일자 기준)
+    # (2) 동일 메인 4일 이내 재등장 금지(섹션별)
     for section in ("중식", "석식"):
         seen: dict[str, int] = {}
         for m in [x for x in meals if x.section == section]:
@@ -411,31 +459,17 @@ def validate_menu(text: str) -> list[str]:
                 )
             seen[m.main] = di
 
-    # (7) 수육: 중식에만
-    for m in meals:
-        if SUYUK in m.main and m.section != "중식":
-            errors.append(f"[{m.section} {m.date_label}] '{SUYUK}'는 중식에만 편성 가능")
+    # (3) 사용자 조건
+    if conditions:
+        errors.extend(cond_mod.validate(meals, conditions))
 
-    # (8) 후라이드치킨: 평일 중식, 월 2회
-    fc = [m for m in meals if FRIED_CHICKEN in m.main]
-    for m in fc:
-        if m.section != "중식":
-            errors.append(f"[{m.section} {m.date_label}] '{FRIED_CHICKEN}'는 중식 전용")
-    if len(fc) != 2:
-        errors.append(f"'{FRIED_CHICKEN}' 월 2회여야 함(현재 {len(fc)}회)")
-
-    # (9) 쭈꾸미: 월 1~2회, 연속(같은 주) 금지
-    jj_days = sorted(_day_index(m.date_label) for m in lunches if JJUKKUMI in m.main) \
-        or sorted(_day_index(m.date_label) for m in meals if JJUKKUMI in m.main)
-    if not (1 <= len(jj_days) <= 2):
-        errors.append(f"'{JJUKKUMI}' 월 1~2회여야 함(현재 {len(jj_days)}회)")
-    if len(jj_days) == 2 and (jj_days[1] - jj_days[0]) < 7:
-        errors.append(f"'{JJUKKUMI}' 최소 1주 간격 필요(간격 {jj_days[1]-jj_days[0]}일)")
-
-    # (10) 생선류 월 4회 이하
-    fish_count = sum(1 for m in meals if _contains_fish(m.main))
-    if fish_count > 4:
-        errors.append(f"생선류 월 4회 이하 위반(현재 {fish_count}회)")
+    # (4) ‘추가된 메뉴만 사용’(메인 기준)
+    if pool_only and pool is not None:
+        names = [d.name for d in pool.mains]
+        for m in meals:
+            main = m.main
+            if main and not any(main == n or n in main or main in n for n in names):
+                errors.append(f"[{m.section} {m.date_label}] 풀에 없는 메인 '{main}'")
 
     return errors
 
