@@ -9,15 +9,18 @@
 
 from __future__ import annotations
 
+import os
+
 from tkinter import (
-    Toplevel, Listbox, Label, Button, Entry, Frame, StringVar, BooleanVar,
-    OptionMenu, Checkbutton, END, SINGLE, messagebox,
+    Toplevel, Listbox, Label, Button, Entry, Frame, Text, StringVar, BooleanVar,
+    OptionMenu, Checkbutton, END, SINGLE, filedialog, messagebox,
 )
 from tkinter import ttk
 from tkinter import font as tkfont
 
 import store
 import conditions as cond_mod
+import importers
 
 FONT_FAMILY = "맑은 고딕"
 SCOPE_KR = {"both": "모두", "lunch": "중식", "dinner": "석식"}
@@ -423,6 +426,168 @@ class _ConditionForm:
             out["category"] = self.v_cat.get()
             out["max"] = n
         self.result = out
+        self.win.destroy()
+
+
+# ============================================================ 예시 식단표(참고 데이터)
+class ExamplesWindow:
+    """기존 식단표를 예시로 등록 → 그 스타일대로 생성(few-shot)."""
+
+    def __init__(self, parent):
+        self.examples = store.get_examples()
+        self.win = Toplevel(parent)
+        self.win.title("예시 식단표")
+        self.win.configure(bg=PANEL_BG)
+        _center(self.win, 640, 560, parent)
+        self.win.transient(parent)
+        _grab(self.win)
+
+        Label(self.win, text="📋 예시 식단표 (스타일 참고)", font=_f(18, True),
+              bg=PANEL_BG, fg=ACCENT).pack(pady=(14, 4))
+        Label(self.win,
+              text="기존에 쓰던 식단표를 등록하면 그 스타일(메뉴 이름·조합)대로 생성합니다.\n"
+                   "직접 붙여넣거나, 엑셀/CSV 파일에서 가져올 수 있어요.",
+              font=_f(11), bg=PANEL_BG, fg="#666", justify="center").pack(pady=(0, 8))
+
+        # 사용 토글
+        self.v_use = BooleanVar(value=store.get_use_examples())
+        Checkbutton(self.win, text="예시 스타일 따라 만들기 (끄면 예시 무시)",
+                    font=_f(12), bg=PANEL_BG, variable=self.v_use,
+                    command=self._toggle_use, selectcolor="white",
+                    activebackground=PANEL_BG).pack(anchor="w", padx=16)
+
+        body = Frame(self.win, bg=PANEL_BG)
+        body.pack(fill="both", expand=True, padx=12, pady=(6, 12))
+        self.lb = Listbox(body, font=_f(12), activestyle="dotbox")
+        self.lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(body, orient="vertical", command=self.lb.yview)
+        sb.pack(side="left", fill="y")
+        self.lb.configure(yscrollcommand=sb.set)
+        self.lb.bind("<Double-1>", lambda e: self._edit())
+
+        btns = Frame(body, bg=PANEL_BG)
+        btns.pack(side="left", fill="y", padx=10)
+        Button(btns, text="붙여넣기\n추가", font=_f(11, True), width=8,
+               command=self._add_paste).pack(pady=4)
+        Button(btns, text="파일에서\n가져오기", font=_f(11, True), width=8,
+               command=self._add_file).pack(pady=4)
+        Button(btns, text="수정", font=_f(12, True), width=8, command=self._edit).pack(pady=4)
+        Button(btns, text="삭제", font=_f(12, True), width=8, command=self._delete).pack(pady=4)
+        self._refresh()
+
+    def _toggle_use(self):
+        store.set_use_examples(bool(self.v_use.get()))
+
+    def _refresh(self):
+        self.lb.delete(0, END)
+        for ex in self.examples:
+            title = ex.get("title", "예시")
+            n = len(ex.get("body", ""))
+            self.lb.insert(END, f"{title}  ({n:,}자)")
+
+    def _sel(self):
+        s = self.lb.curselection()
+        return s[0] if s else None
+
+    def _add_paste(self):
+        res = _ExampleForm(self.win).result
+        if res:
+            self.examples.append(res)
+            self._save()
+
+    def _add_file(self):
+        path = filedialog.askopenfilename(
+            title="예시로 가져올 파일 선택",
+            filetypes=[("엑셀/표 파일", "*.xlsx *.xlsm *.csv *.tsv *.txt"),
+                       ("모든 파일", "*.*")],
+            parent=self.win,
+        )
+        if not path:
+            return
+        try:
+            body = importers.read_table_file(path)
+        except Exception as e:  # noqa: BLE001
+            messagebox.showerror("오류", f"파일을 읽지 못했어요.\n\n{e}", parent=self.win)
+            return
+        if not body.strip():
+            messagebox.showwarning("확인", "파일에서 읽을 내용이 없어요.", parent=self.win)
+            return
+        title = os.path.splitext(os.path.basename(path))[0]
+        # 가져온 내용을 확인/수정 후 저장
+        res = _ExampleForm(self.win, {"title": title, "body": body}).result
+        if res:
+            self.examples.append(res)
+            self._save()
+
+    def _edit(self):
+        i = self._sel()
+        if i is None:
+            messagebox.showinfo("안내", "수정할 예시를 선택하세요.", parent=self.win)
+            return
+        res = _ExampleForm(self.win, self.examples[i]).result
+        if res:
+            self.examples[i] = res
+            self._save()
+
+    def _delete(self):
+        i = self._sel()
+        if i is None:
+            messagebox.showinfo("안내", "삭제할 예시를 선택하세요.", parent=self.win)
+            return
+        if messagebox.askyesno("삭제 확인",
+                               f"‘{self.examples[i].get('title', '예시')}’ 삭제할까요?",
+                               parent=self.win):
+            del self.examples[i]
+            self._save()
+
+    def _save(self):
+        store.save_examples(self.examples)
+        self._refresh()
+
+
+class _ExampleForm:
+    """예시 추가/수정 폼(제목 + 여러 줄 본문). 끝나면 self.result(dict 또는 None)."""
+
+    def __init__(self, parent, item=None):
+        self.result = None
+        self.win = Toplevel(parent)
+        self.win.title("예시 식단표")
+        self.win.configure(bg=PANEL_BG)
+        _center(self.win, 560, 520, parent)
+        self.win.transient(parent)
+        _grab(self.win)
+
+        Label(self.win, text="제목", font=_f(12), bg=PANEL_BG).pack(anchor="w", padx=20, pady=(16, 2))
+        self.v_title = StringVar(value=(item or {}).get("title", ""))
+        Entry(self.win, textvariable=self.v_title, font=_f(12)).pack(fill="x", padx=20)
+
+        Label(self.win, text="식단표 내용 (붙여넣기)", font=_f(12), bg=PANEL_BG)\
+            .pack(anchor="w", padx=20, pady=(12, 2))
+        tf = Frame(self.win, bg=PANEL_BG)
+        tf.pack(fill="both", expand=True, padx=20)
+        self.txt = Text(tf, font=_f(11), wrap="word", undo=True)
+        self.txt.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.txt.yview)
+        sb.pack(side="left", fill="y")
+        self.txt.configure(yscrollcommand=sb.set)
+        if item and item.get("body"):
+            self.txt.insert("1.0", item["body"])
+
+        bar = Frame(self.win, bg=PANEL_BG)
+        bar.pack(side="bottom", fill="x", pady=12)
+        Button(bar, text="저장", font=_f(12, True), width=8, bg=ACCENT, fg="white",
+               command=self._ok).pack(side="right", padx=(0, 20))
+        Button(bar, text="취소", font=_f(12), width=8,
+               command=self.win.destroy).pack(side="right", padx=6)
+        self.win.wait_window()
+
+    def _ok(self):
+        title = self.v_title.get().strip() or "예시"
+        body = self.txt.get("1.0", END).strip()
+        if not body:
+            messagebox.showwarning("확인", "식단표 내용을 입력하세요.", parent=self.win)
+            return
+        self.result = {"title": title, "body": body}
         self.win.destroy()
 
 

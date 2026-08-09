@@ -224,12 +224,43 @@ FEWSHOT_EXAMPLE = """\
 """
 
 
+EXAMPLES_MAX_CHARS = 12000  # 예시 전체 주입 상한(토큰 절약)
+
+
+def render_examples_prompt(examples: list | None) -> str:
+    """등록된 예시 식단표를 few-shot 스타일 참고 블록으로 직렬화."""
+    if not examples:
+        return ""
+    parts: list[str] = [
+        "[참고 식단표 예시]",
+        "아래는 실제로 쓰던 식단표입니다. 메뉴 이름 표기 방식, 반찬·국 조합, "
+        "전반적인 구성 스타일을 최대한 이 예시들과 비슷하게 맞추세요. "
+        "단, 날짜/요일은 요청한 달에 맞추고 아래 규칙은 반드시 지킵니다.",
+    ]
+    used = 0
+    for i, ex in enumerate(examples, start=1):
+        body = (ex.get("body") or "").strip() if isinstance(ex, dict) else str(ex).strip()
+        if not body:
+            continue
+        title = ex.get("title", f"예시 {i}") if isinstance(ex, dict) else f"예시 {i}"
+        chunk = f"--- 예시 {i}: {title} ---\n{body}"
+        if used + len(chunk) > EXAMPLES_MAX_CHARS:
+            chunk = chunk[: max(0, EXAMPLES_MAX_CHARS - used)]
+        parts.append(chunk)
+        used += len(chunk)
+        if used >= EXAMPLES_MAX_CHARS:
+            break
+    return "\n".join(parts)
+
+
 def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction: str = "",
-                      conditions: list | None = None, pool_only: bool = False) -> str:
-    """달력 골격 + 허용 메뉴 풀 + 규칙/조건 리마인드를 담은 사용자 프롬프트.
+                      conditions: list | None = None, pool_only: bool = False,
+                      examples: list | None = None) -> str:
+    """달력 골격 + 허용 메뉴 풀 + 규칙/조건 + 예시(few-shot)를 담은 사용자 프롬프트.
 
     correction: 직전 결과의 위반 목록(있으면 재생성 보정 지시로 덧붙임).
     conditions: 사용자 조건 리스트. pool_only: 풀의 메뉴만 사용.
+    examples: 참고 식단표 예시(스타일 모방용).
     """
     pool = pool or default_pool()
     fix_block = ""
@@ -242,9 +273,12 @@ def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction:
     cond_block = ("\n\n" + cond_block) if cond_block else ""
     pool_block = ("\n\n[메뉴 제한] 위 ‘허용 메뉴 풀’에 있는 메뉴만 사용하세요. "
                   "풀에 없는 메인/반찬/국은 절대 만들지 마세요.") if pool_only else ""
+    ex_block = render_examples_prompt(examples)
+    ex_block = (ex_block + "\n\n") if ex_block else ""
     return (
         f"{FEWSHOT_EXAMPLE}\n"
         f"위 형식을 그대로 따라 '{plan.title}' 식단표를 생성하세요.\n\n"
+        f"{ex_block}"
         f"{render_pool_for_prompt(pool)}{pool_block}\n\n"
         f"아래는 채워야 할 운영일 골격입니다(각 날짜 속성 포함). "
         f"전달된 날짜는 전부 중식·석식을 채우고, '조리용이메뉴' 태그가 붙은 날은 "
@@ -270,11 +304,12 @@ def generate_menu(
     correction: str = "",
     conditions: list | None = None,
     pool_only: bool = False,
+    examples: list | None = None,
 ) -> str:
     """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다.
 
     closed_days: 예외 휴무일(일자 집합). pool: 허용 메뉴 풀(미지정 시 시드 사용).
-    correction: 재생성 보정 지시(규칙 위반 목록).
+    correction: 재생성 보정 지시(규칙 위반 목록). examples: 스타일 참고 예시.
     """
     # 신규 google-genai SDK 사용 (from google import genai)
     from google import genai
@@ -290,7 +325,8 @@ def generate_menu(
     response = client.models.generate_content(
         model=model,
         contents=build_user_prompt(plan, pool=pool, correction=correction,
-                                   conditions=conditions, pool_only=pool_only),
+                                   conditions=conditions, pool_only=pool_only,
+                                   examples=examples),
         config=types.GenerateContentConfig(
             # 데이터 정형성을 위한 System Instruction 설정 부분
             system_instruction=SYSTEM_INSTRUCTION,
@@ -313,6 +349,7 @@ def generate_validated_menu(
     progress=None,
     conditions: list | None = None,
     pool_only: bool = False,
+    examples: list | None = None,
 ) -> tuple[str, list[str]]:
     """검증을 통과할 때까지(최대 max_retries회) 재생성한다.
 
@@ -328,7 +365,7 @@ def generate_validated_menu(
         text = generate_menu(
             year, month, model=model, api_key=api_key, temperature=temperature,
             closed_days=closed_days, pool=pool, correction=correction,
-            conditions=conditions, pool_only=pool_only,
+            conditions=conditions, pool_only=pool_only, examples=examples,
         )
         errors = validate_menu(text, conditions=conditions, pool=pool, pool_only=pool_only)
         if not errors:

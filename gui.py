@@ -149,6 +149,9 @@ class MenuPlannerApp:
         Button(rrow, text="🧩 조건 설정", font=self.f_button, bg="#FFFFFF", relief="raised",
                pady=8, command=self.open_conditions)\
             .pack(side="left", expand=True, fill="x", padx=(4, 0))
+        Button(box_r, text="📋 예시 식단표 (스타일 참고)", font=self.f_button, bg="#FFFFFF",
+               relief="raised", pady=8, command=self.open_examples)\
+            .pack(fill="x", pady=(8, 0))
         self.var_pool_only = BooleanVar(value=store.get_pool_only())
         Checkbutton(box_r, text="추가된 메뉴만 사용 (끄면 모든 한식 메뉴에서 랜덤)",
                     font=self.f_label, bg=PANEL_BG, variable=self.var_pool_only,
@@ -221,6 +224,9 @@ class MenuPlannerApp:
 
     def open_conditions(self):
         settings_windows.ConditionsWindow(self.root)
+
+    def open_examples(self):
+        settings_windows.ExamplesWindow(self.root)
 
     def _on_pool_only(self):
         store.set_pool_only(bool(self.var_pool_only.get()))
@@ -405,6 +411,7 @@ class MenuPlannerApp:
                                  "아래 때문에 식단표를 만들 수 없어요:\n\n" + "\n".join(conflicts))
             return
         mpool = store.pool_to_menupool(pool_dict)
+        examples = store.get_examples() if store.get_use_examples() else None
 
         self.cur_year, self.cur_month = int(self.var_year.get()), int(self.var_month.get())
         self._set_busy(True)
@@ -417,7 +424,7 @@ class MenuPlannerApp:
                 text, errors = generate_validated_menu(
                     year, month, model="gemini-2.5-flash",
                     api_key=app_config.get_api_key(), pool=mpool,
-                    conditions=conds, pool_only=pool_only,
+                    conditions=conds, pool_only=pool_only, examples=examples,
                     progress=lambda msg: self.root.after(0, self.var_status.set, msg),
                 )
                 self.root.after(0, self._on_done, text, errors)

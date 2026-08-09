@@ -19,6 +19,7 @@ import menu_data
 
 POOL_FILE = "menu_pool.json"
 COND_FILE = "conditions.json"
+EXAMPLES_FILE = "examples.json"
 
 # 메인 메뉴 1개의 필드/기본값
 MAIN_FIELDS: dict = {
@@ -99,7 +100,25 @@ def save_conditions(conds: list[dict]) -> None:
     _save(COND_FILE, conds)
 
 
-# ---- 설정: 추가된 메뉴만 사용(pool_only) ----
+# ---- 예시 식단표(참고 데이터 / few-shot) ----
+
+def get_examples() -> list[dict]:
+    """등록된 예시 식단표 목록. 각 항목 {"title": str, "body": str}."""
+    e = _load(EXAMPLES_FILE, None)
+    if not e:
+        return []
+    out = []
+    for item in e:
+        if isinstance(item, dict) and item.get("body"):
+            out.append({"title": item.get("title", "예시"), "body": item["body"]})
+    return out
+
+
+def save_examples(examples: list[dict]) -> None:
+    _save(EXAMPLES_FILE, examples)
+
+
+# ---- 설정: 추가된 메뉴만 사용(pool_only) / 예시 스타일 따르기(use_examples) ----
 
 def get_pool_only() -> bool:
     return bool(app_config.get_setting("pool_only", False))
@@ -107,6 +126,14 @@ def get_pool_only() -> bool:
 
 def set_pool_only(v: bool) -> None:
     app_config.set_setting("pool_only", bool(v))
+
+
+def get_use_examples() -> bool:
+    return bool(app_config.get_setting("use_examples", True))
+
+
+def set_use_examples(v: bool) -> None:
+    app_config.set_setting("use_examples", bool(v))
 
 
 # ---- 충돌 점검(생성 전) ----

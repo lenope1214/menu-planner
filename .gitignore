@@ -6,9 +6,10 @@
 config.json
 config.json.bak
 config.json.tmp
-# 사용자 메뉴/조건 데이터(런타임 생성)
+# 사용자 메뉴/조건/예시 데이터(런타임 생성)
 menu_pool.json
 conditions.json
+examples.json
 
 # Python
 __pycache__/
