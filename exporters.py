@@ -38,6 +38,11 @@ BLUE = "FFCFE2F3"         # 주방 날짜헤더
 FOOTER_TEXT = "\n" + FOOTER_NOTE
 WD = WEEKDAYS_KR          # 일~토
 
+# 배달형 메뉴 행 높이(pt).
+# TODO: 셀 내용(메뉴 개수·글자 수·열 너비·폰트)에 따라 자동 계산하도록 교체 예정.
+#       그때까지는 넉넉한 고정값을 사용한다.
+MENU_ROW_HEIGHT = 450
+
 
 def save_txt(text: str, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
@@ -163,7 +168,7 @@ def _delivery_section(ws, md, section, weeks, r):
             val = "\n\n".join(md.get(day, section)) if has else None
             _set(ws, r + 1, ci, val, font=FONT_BODY, size=26,
                  fill=(menu_fill if day else TEAL), valign="top")
-        ws.row_dimensions[r + 1].height = 337.5
+        ws.row_dimensions[r + 1].height = MENU_ROW_HEIGHT
         r += 2
 
     # 안내문 (3행 병합, Arial 29 굵게, 정렬 일반=왼쪽)
