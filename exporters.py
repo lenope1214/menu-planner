@@ -40,6 +40,10 @@ BLUE = "FFCFE2F3"         # 주방 날짜헤더
 FOOTER_TEXT = "\n" + FOOTER_NOTE
 WD = WEEKDAYS_KR          # 일~토
 
+# 메뉴 열 너비(엑셀 단위). 기존 13 → 넓혀서 줄바꿈/행높이를 줄인다.
+# (넓혀서 종이 폭을 넘어도 _page 의 fitToWidth 로 인쇄는 1페이지 폭에 맞춰짐)
+MENU_COL_WIDTH = 26.0
+
 # ---- 행 높이 자동 계산 파라미터 ----
 _LINE_RATIO = 1.35     # 한 줄 높이 ≈ 폰트pt × 이 비율(줄간격 포함)
 _ROW_PAD_PT = 16       # 셀 위/아래 여백(pt)
@@ -157,19 +161,23 @@ def _merge_box(ws, r1, c1, r2, c2, value, *, font, size, bold=False, color=TXT,
 
 def _page(ws, landscape):
     from openpyxl.worksheet.page import PageMargins
+    from openpyxl.worksheet.properties import PageSetupProperties
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
     ws.page_setup.paperSize = 9  # A4
     ws.page_margins = PageMargins(left=0 if landscape else 0.7,
                                   right=0 if landscape else 0.7,
                                   top=0.75, bottom=0.75)
+    # 넓힌 열이 종이 폭을 넘어도 인쇄 시 '1페이지 폭'에 자동으로 맞춘다(세로는 여러 장 허용).
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
 
 
 # ---- 배달형(달력형): 세로 A4, 한 시트에 중식/석식 ----
 def _xlsx_delivery(wb, md: MonthData) -> None:
     ws = wb.create_sheet("배달")
-    ws.column_dimensions["A"].width = 31.4
-    for c in "BCDEFG":
-        ws.column_dimensions[c].width = 13.0
+    for c in "ABCDEFG":  # 요일 7칸 균일하게 넓힘
+        ws.column_dimensions[c].width = MENU_COL_WIDTH
     _page(ws, landscape=False)
 
     weeks = calendar_weeks(md.year, md.month)
@@ -208,8 +216,8 @@ def _delivery_section(ws, md, section, weeks, r):
             _set(ws, r + 1, ci, val, font=FONT_BODY, size=26,
                  fill=(menu_fill if day else TEAL), valign="top", wrap=True)
             vals.append(val)
-        # 배달형 메뉴 열 너비 13.0 기준으로 내용에 맞춰 행 높이 계산
-        ws.row_dimensions[r + 1].height = calc_row_height(vals, 13.0, 26)
+        # 넓힌 메뉴 열 너비 기준으로 내용에 맞춰 행 높이 계산
+        ws.row_dimensions[r + 1].height = calc_row_height(vals, MENU_COL_WIDTH, 26)
         r += 2
 
     # 안내문 (3행 병합, Arial 29 굵게, 정렬 일반=왼쪽)
@@ -223,10 +231,9 @@ def _delivery_section(ws, md, section, weeks, r):
 # ---- 주방형: 가로 A4, 주 단위 4행 블록 ----
 def _xlsx_kitchen(wb, md: MonthData) -> None:
     ws = wb.create_sheet("주방")
-    ws.column_dimensions["A"].width = 13.0
-    ws.column_dimensions["B"].width = 25.1
-    for c in "CDEFGH":
-        ws.column_dimensions[c].width = 13.0
+    ws.column_dimensions["A"].width = 13.0        # '구분' 라벨 열
+    for c in "BCDEFGH":                            # 요일 7칸 균일하게 넓힘
+        ws.column_dimensions[c].width = MENU_COL_WIDTH
     _page(ws, landscape=True)
 
     weeks = calendar_weeks(md.year, md.month)
@@ -257,8 +264,8 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
                 _set(ws, rr, ci + 2, val, font=FONT_BODY, size=24, fill=GRAY,
                      valign="top", wrap=True)
                 vals.append(val)
-            # 주방형 메뉴 열 너비 13.0 기준으로 내용에 맞춰 행 높이 계산
-            ws.row_dimensions[rr].height = calc_row_height(vals, 13.0, 24)
+            # 넓힌 메뉴 열 너비 기준으로 내용에 맞춰 행 높이 계산
+            ws.row_dimensions[rr].height = calc_row_height(vals, MENU_COL_WIDTH, 24)
         r += 4
 
 
