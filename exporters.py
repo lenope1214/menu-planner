@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import datetime
+import math
 import os
 import sys
 import tempfile
+import unicodedata
 
 from menu_planner import parse_menu_text
 import layouts
@@ -38,10 +40,46 @@ BLUE = "FFCFE2F3"         # 주방 날짜헤더
 FOOTER_TEXT = "\n" + FOOTER_NOTE
 WD = WEEKDAYS_KR          # 일~토
 
-# 배달형 메뉴 행 높이(pt).
-# TODO: 셀 내용(메뉴 개수·글자 수·열 너비·폰트)에 따라 자동 계산하도록 교체 예정.
-#       그때까지는 넉넉한 고정값을 사용한다.
-MENU_ROW_HEIGHT = 450
+# ---- 행 높이 자동 계산 파라미터 ----
+_LINE_RATIO = 1.35     # 한 줄 높이 ≈ 폰트pt × 이 비율(줄간격 포함)
+_ROW_PAD_PT = 16       # 셀 위/아래 여백(pt)
+_MIN_ROW_PT = 120      # 최소 행 높이(pt)
+_MAX_ROW_PT = 620      # 최대 행 높이(pt) — 과도한 줄바꿈 방지 클램프
+_COL_PX_PER_UNIT = 7.0     # 엑셀 열너비 1 ≈ 7px(기본 폰트 문자폭)
+_COL_PX_PAD = 5.0          # 열 좌우 여백(px)
+
+
+def _char_width(ch: str) -> int:
+    """전각(한글/한자/가나 등)=2, 반각=1 로 표시폭 계산."""
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def _cell_lines(text: str, col_width: float, font_size: int) -> int:
+    """셀 텍스트가 차지하는 표시 줄 수(명시적 줄바꿈 + 자동 줄바꿈 추정).
+
+    col_width: 엑셀 열 너비, font_size: 셀 폰트 pt.
+    한 줄에 들어가는 '표시폭 단위(전각=2)'를 열너비·폰트로 추정한다.
+    """
+    if not text:
+        return 1
+    col_px = col_width * _COL_PX_PER_UNIT + _COL_PX_PAD
+    half_char_px = font_size * (96.0 / 72.0) / 2.0     # 반각 1글자(=1단위) 픽셀폭
+    units_per_line = max(2.0, col_px / half_char_px)   # 한 줄 표시폭 단위 수
+    lines = 0
+    for seg in text.split("\n"):
+        if not seg:
+            lines += 1                                  # 빈 줄
+            continue
+        w = sum(_char_width(c) for c in seg)
+        lines += max(1, math.ceil(w / units_per_line))
+    return lines
+
+
+def calc_row_height(texts, col_width: float, font_size: int) -> float:
+    """한 행의 여러 셀 중 가장 높은 셀 기준으로 행 높이(pt)를 계산."""
+    lines = max((_cell_lines(t or "", col_width, font_size) for t in texts), default=1)
+    h = lines * font_size * _LINE_RATIO + _ROW_PAD_PT
+    return round(max(_MIN_ROW_PT, min(_MAX_ROW_PT, h)), 1)
 
 
 def save_txt(text: str, path: str) -> None:
@@ -163,12 +201,15 @@ def _delivery_section(ws, md, section, weeks, r):
             _set(ws, r, ci, (day or None), font=FONT_BODY, size=29, bold=True,
                  fill=(GRAY if day else TEAL), valign="center")
         ws.row_dimensions[r].height = 37.5
+        vals = []
         for ci, day in enumerate(week, start=1):
             has = day and md.has_meal(day, section)
             val = "\n\n".join(md.get(day, section)) if has else None
             _set(ws, r + 1, ci, val, font=FONT_BODY, size=26,
-                 fill=(menu_fill if day else TEAL), valign="top")
-        ws.row_dimensions[r + 1].height = MENU_ROW_HEIGHT
+                 fill=(menu_fill if day else TEAL), valign="top", wrap=True)
+            vals.append(val)
+        # 배달형 메뉴 열 너비 13.0 기준으로 내용에 맞춰 행 높이 계산
+        ws.row_dimensions[r + 1].height = calc_row_height(vals, 13.0, 26)
         r += 2
 
     # 안내문 (3행 병합, Arial 29 굵게, 정렬 일반=왼쪽)
@@ -209,12 +250,15 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
             rr = r + 2 + k
             _set(ws, rr, 1, section, font=FONT_BODY, size=24, bold=True,
                  fill=(LAVENDER if section == "중식" else PEACH), valign="center")
+            vals = []
             for ci, day in enumerate(week):
                 has = day and md.has_meal(day, section)
                 val = "\n\n".join(md.get(day, section)) if has else None
                 _set(ws, rr, ci + 2, val, font=FONT_BODY, size=24, fill=GRAY,
-                     valign="top")
-            ws.row_dimensions[rr].height = 311.2
+                     valign="top", wrap=True)
+                vals.append(val)
+            # 주방형 메뉴 열 너비 13.0 기준으로 내용에 맞춰 행 높이 계산
+            ws.row_dimensions[rr].height = calc_row_height(vals, 13.0, 24)
         r += 4
 
 
