@@ -53,27 +53,45 @@ def _center(win, w, h, parent):
 
 # ============================================================ 메뉴 설정
 class MenuSettingsWindow:
+    """메뉴 등록/수정/삭제 + 검색 + 정렬 + 일시정지.
+
+    Treeview 의 iid 는 항상 '풀 리스트의 원래 인덱스'로 둔다. 그래야 검색으로
+    걸러내거나 정렬로 순서를 바꿔도 선택한 행 → 실제 항목 대응이 어긋나지 않는다.
+    """
+
     # (컬럼id, 헤더, 너비, 정렬)
     COLS = {
-        "mains": [("name", "이름", 150, "w"), ("flavor", "맛", 60, "center"),
-                  ("scope", "끼니", 60, "center"), ("fish", "생선", 55, "center"),
-                  ("weekday", "평일만", 65, "center"), ("max", "월최대", 65, "center")],
-        "sides": [("name", "반찬 이름", 380, "w")],
-        "soups": [("name", "국 이름", 380, "w")],
+        "mains": [("name", "이름", 160, "w"), ("state", "상태", 110, "center"),
+                  ("flavor", "맛", 60, "center"), ("scope", "끼니", 60, "center"),
+                  ("fish", "생선", 55, "center"), ("weekday", "평일만", 65, "center"),
+                  ("max", "월최대", 65, "center")],
+        "sides": [("name", "반찬 이름", 300, "w"), ("state", "상태", 150, "center")],
+        "soups": [("name", "국 이름", 300, "w"), ("state", "상태", 150, "center")],
     }
+    TABS = (("mains", "메인 요리"), ("sides", "반찬"), ("soups", "국"))
 
-    def __init__(self, parent):
+    def __init__(self, parent, on_close=None):
         self.pool = store.get_pool()
+        self._on_close = on_close
+        self.tabs: dict = {}
+        self.search: dict = {}
+        self.counts: dict = {}
+        self.pause_btns: dict = {}
+        # (정렬 컬럼, 내림차순). None = 등록한 순서 그대로 — 첫 화면은 손대지 않는다.
+        self.sort: dict = {k: (None, False) for k, _ in self.TABS}
+
         self.win = Toplevel(parent)
         self.win.title("메뉴 설정")
         self.win.configure(bg=PANEL_BG)
-        _center(self.win, 720, 560, parent)
+        _center(self.win, 820, 600, parent)
         self.win.transient(parent)
+        self.win.protocol("WM_DELETE_WINDOW", self._close)
         _grab(self.win)
 
         Label(self.win, text="🍳 메뉴 설정", font=_f(18, True), bg=PANEL_BG, fg=ACCENT)\
             .pack(pady=(14, 4))
-        Label(self.win, text="메인·반찬·국 메뉴를 등록/수정/삭제할 수 있어요. (제목 줄로 항목 구분)",
+        Label(self.win, text="검색해서 이미 등록했는지 확인하고, 머리글을 눌러 정렬할 수 있어요. "
+                             "당분간 못 내는 메뉴는 ‘일시정지’ 하세요.",
               font=_f(11), bg=PANEL_BG, fg="#666").pack(pady=(0, 8))
 
         style = ttk.Style(self.win)
@@ -83,99 +101,236 @@ class MenuSettingsWindow:
 
         nb = ttk.Notebook(self.win)
         nb.pack(fill="both", expand=True, padx=12, pady=(0, 12))
-        self.tabs = {}
-        for key, title in (("mains", "메인 요리"), ("sides", "반찬"), ("soups", "국")):
-            self.tabs[key] = self._build_tab(nb, key, title)
+        for key, title in self.TABS:
+            self._build_tab(nb, key, title)
 
+    def _close(self):
+        self.win.destroy()
+        if self._on_close:
+            self._on_close()
+
+    # ---- 탭 구성 ----
     def _build_tab(self, nb, key, title):
         tab = Frame(nb, bg="white")
         nb.add(tab, text=f"  {title}  ")
+
+        # 검색줄
+        top = Frame(tab, bg="white")
+        top.pack(fill="x", padx=10, pady=(10, 0))
+        Label(top, text="🔍 검색", font=_f(12), bg="white").pack(side="left")
+        var = StringVar()
+        self.search[key] = var
+        ent = Entry(top, textvariable=var, font=_f(12))
+        ent.pack(side="left", fill="x", expand=True, padx=6)
+        var.trace_add("write", lambda *_a, k=key: self._refresh(k))
+        Button(top, text="지우기", font=_f(11), command=lambda: var.set(""))\
+            .pack(side="left")
+        self.counts[key] = Label(top, text="", font=_f(11), bg="white", fg="#666")
+        self.counts[key].pack(side="left", padx=(10, 0))
+
+        body = Frame(tab, bg="white")
+        body.pack(fill="both", expand=True)
+
         cols = self.COLS[key]
-        tv = ttk.Treeview(tab, columns=[c[0] for c in cols], show="headings",
+        tv = ttk.Treeview(body, columns=[c[0] for c in cols], show="headings",
                           selectmode="browse", style="Menu.Treeview")
-        for cid, head, width, anchor in cols:
-            tv.heading(cid, text=head)
+        for cid, _head, width, anchor in cols:
+            tv.heading(cid, command=lambda c=cid, k=key: self._sort_by(k, c))
             tv.column(cid, width=width, anchor=anchor, stretch=(cid == "name"))
+        tv.tag_configure("paused", foreground="#9E9E9E")
         tv.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=10)
-        sb = ttk.Scrollbar(tab, orient="vertical", command=tv.yview)
+        sb = ttk.Scrollbar(body, orient="vertical", command=tv.yview)
         sb.pack(side="left", fill="y", pady=10)
         tv.configure(yscrollcommand=sb.set)
+        self.tabs[key] = tv
 
-        btns = Frame(tab, bg="white")
+        btns = Frame(body, bg="white")
         btns.pack(side="left", fill="y", padx=10, pady=10)
-        Button(btns, text="추가", font=_f(12, True), width=8,
+        Button(btns, text="추가", font=_f(12, True), width=10,
                command=lambda: self._add(key)).pack(pady=4)
-        Button(btns, text="수정", font=_f(12, True), width=8,
+        Button(btns, text="수정", font=_f(12, True), width=10,
                command=lambda: self._edit(key)).pack(pady=4)
-        Button(btns, text="삭제", font=_f(12, True), width=8,
+        Button(btns, text="삭제", font=_f(12, True), width=10,
                command=lambda: self._delete(key)).pack(pady=4)
-        tv.bind("<Double-1>", lambda e: self._edit(key))
-        self._refresh(key, tv)
-        return tv
+        self.pause_btns[key] = Button(btns, text="⏸ 일시정지", font=_f(11, True), width=10,
+                                      command=lambda: self._toggle_pause(key))
+        self.pause_btns[key].pack(pady=(16, 4))
 
+        tv.bind("<Double-1>", lambda e: self._edit(key))
+        tv.bind("<<TreeviewSelect>>", lambda e, k=key: self._sync_pause_btn(k))
+        self._refresh(key)
+
+    # ---- 데이터 ----
     def _items(self, key):
         return self.pool[key]
 
+    def _name_at(self, key, i):
+        it = self._items(key)[i]
+        return it.get("name", "") if key == "mains" else it
+
+    def _state_text(self, key, name):
+        if not store.is_paused(key, name):
+            return "사용"
+        note = store.paused_note(key, name)
+        return f"⏸ {note}" if note else "⏸ 일시정지"
+
     def _row_values(self, key, item):
+        name = item.get("name", "") if key == "mains" else item
+        state = self._state_text(key, name)
         if key != "mains":
-            return (item,)
-        return (item.get("name", ""), item.get("flavor", ""),
+            return (name, state)
+        return (name, state, item.get("flavor", ""),
                 SCOPE_KR.get(item.get("meal_scope", "both"), "모두"),
                 "○" if item.get("is_fish") else "",
                 "○" if item.get("weekday_only") else "",
                 item.get("monthly_max") or "")
 
-    def _refresh(self, key, tv=None):
-        tv = tv or self.tabs[key]
-        tv.delete(*tv.get_children())
+    # ---- 검색/정렬/표시 ----
+    @staticmethod
+    def _sortable(v):
+        """숫자로 보이는 값은 숫자로 정렬(‘10’이 ‘2’보다 앞에 오지 않도록)."""
+        s = str(v).strip()
+        return (0, int(s), "") if s.isdigit() else (1, 0, s)
+
+    def _sort_by(self, key, col):
+        """머리글 클릭: 처음엔 오름차순, 같은 컬럼을 또 누르면 내림차순."""
+        cur_col, rev = self.sort[key]
+        self.sort[key] = (col, (not rev) if col == cur_col else False)
+        self._refresh(key)
+
+    def _refresh(self, key, select=None):
+        tv = self.tabs[key]
+        cols = self.COLS[key]
+        sort_col, rev = self.sort[key]
+
+        # 머리글에 정렬 방향 표시
+        for cid, head, _w, _a in cols:
+            arrow = ("  ▼" if rev else "  ▲") if cid == sort_col else ""
+            tv.heading(cid, text=head + arrow)
+
+        q = self.search[key].get().strip().lower()
+        rows = []
         for i, it in enumerate(self._items(key)):
-            tv.insert("", "end", iid=str(i), values=self._row_values(key, it))
+            vals = self._row_values(key, it)
+            if q and q not in str(vals[0]).lower():
+                continue
+            rows.append((i, vals))
+
+        if sort_col is not None:
+            ci = next((n for n, c in enumerate(cols) if c[0] == sort_col), 0)
+            rows.sort(key=lambda r: self._sortable(r[1][ci]), reverse=rev)
+
+        tv.delete(*tv.get_children())
+        for i, vals in rows:
+            paused = store.is_paused(key, self._name_at(key, i))
+            tv.insert("", "end", iid=str(i), values=vals,
+                      tags=("paused",) if paused else ())
+
+        total = len(self._items(key))
+        if q:
+            if rows:
+                self.counts[key].config(text=f"‘{q}’ {len(rows)}개 찾음 (전체 {total}개)",
+                                        fg="#2E7D32")
+            else:
+                self.counts[key].config(text=f"‘{q}’ 없음 — 아직 등록 안 됐어요",
+                                        fg="#C62828")
+        else:
+            self.counts[key].config(text=f"전체 {total}개", fg="#666")
+
+        if select is not None and tv.exists(str(select)):
+            tv.selection_set(str(select))
+            tv.see(str(select))
+        self._sync_pause_btn(key)
 
     def _sel(self, key):
         s = self.tabs[key].selection()
         return int(s[0]) if s else None
 
+    # ---- 일시정지 ----
+    def _sync_pause_btn(self, key):
+        i = self._sel(key)
+        paused = i is not None and store.is_paused(key, self._name_at(key, i))
+        self.pause_btns[key].config(text="▶ 다시 사용" if paused else "⏸ 일시정지")
+
+    def _toggle_pause(self, key):
+        i = self._sel(key)
+        if i is None:
+            messagebox.showinfo("안내", "일시정지할 메뉴를 목록에서 먼저 누르세요.",
+                                parent=self.win)
+            return
+        name = self._name_at(key, i)
+        if store.is_paused(key, name):
+            store.set_paused(key, name, False)
+        else:
+            note = _ask_text(self.win, "일시정지",
+                             f"‘{name}’ 을(를) 당분간 식단에서 뺍니다.\n"
+                             f"사유·기간 (안 적어도 됩니다)")
+            if note is None:      # 취소
+                return
+            store.set_paused(key, name, True, note)
+        self._refresh(key, select=i)
+
+    # ---- 추가/수정/삭제 ----
     def _add(self, key):
         if key == "mains":
             res = _MainForm(self.win).result
-            if res:
-                self._items(key).append(res)
+            if not res:
+                return
+            dup = next((n for n, it in enumerate(self._items(key))
+                        if it.get("name") == res["name"]), None)
+            if dup is not None:
+                messagebox.showinfo("이미 있어요", f"‘{res['name']}’ 은(는) 이미 등록돼 있어요.",
+                                    parent=self.win)
+                self._refresh(key, select=dup)
+                return
+            self._items(key).append(res)
         else:
             name = _ask_text(self.win, f"{'반찬' if key == 'sides' else '국'} 추가", "메뉴 이름")
-            if name:
-                self._items(key).append(name.strip())
-        self._save_and_refresh(key)
+            if not name or not name.strip():
+                return
+            name = name.strip()
+            dup = next((n for n, it in enumerate(self._items(key)) if it == name), None)
+            if dup is not None:
+                messagebox.showinfo("이미 있어요", f"‘{name}’ 은(는) 이미 등록돼 있어요.",
+                                    parent=self.win)
+                self._refresh(key, select=dup)
+                return
+            self._items(key).append(name)
+        self._save_and_refresh(key, select=len(self._items(key)) - 1)
 
     def _edit(self, key):
         i = self._sel(key)
         if i is None:
             messagebox.showinfo("안내", "수정할 항목을 선택하세요.", parent=self.win)
             return
+        old = self._name_at(key, i)
         if key == "mains":
             res = _MainForm(self.win, self._items(key)[i]).result
-            if res:
-                self._items(key)[i] = res
+            if not res:
+                return
+            self._items(key)[i] = res
         else:
-            cur = self._items(key)[i]
-            name = _ask_text(self.win, "메뉴 수정", "메뉴 이름", cur)
-            if name:
-                self._items(key)[i] = name.strip()
-        self._save_and_refresh(key)
+            name = _ask_text(self.win, "메뉴 수정", "메뉴 이름", old)
+            if not name or not name.strip():
+                return
+            self._items(key)[i] = name.strip()
+        store.rename_paused(key, old, self._name_at(key, i))
+        self._save_and_refresh(key, select=i)
 
     def _delete(self, key):
         i = self._sel(key)
         if i is None:
             messagebox.showinfo("안내", "삭제할 항목을 선택하세요.", parent=self.win)
             return
-        item = self._items(key)[i]
-        name = item.get("name", "") if key == "mains" else item
+        name = self._name_at(key, i)
         if messagebox.askyesno("삭제 확인", f"‘{name}’ 을(를) 삭제할까요?", parent=self.win):
             del self._items(key)[i]
+            store.clear_paused(key, name)
             self._save_and_refresh(key)
 
-    def _save_and_refresh(self, key):
+    def _save_and_refresh(self, key, select=None):
         store.save_pool(self.pool)
-        self._refresh(key)
+        self._refresh(key, select=select)
 
 
 class _MainForm:
@@ -258,8 +413,10 @@ class ConditionsWindow:
 
         Label(self.win, text="🧩 조건 설정", font=_f(18, True), bg=PANEL_BG, fg=ACCENT)\
             .pack(pady=(14, 4))
-        Label(self.win, text="식단표를 만들 때 반드시 지킬 조건을 등록/수정/삭제하세요.",
-              font=_f(11), bg=PANEL_BG, fg="#666").pack(pady=(0, 8))
+        Label(self.win, text="식단표를 만들 때 반드시 지킬 조건을 등록/수정/삭제하세요.\n"
+                             "‘추가’를 누르면 문장으로 바로 쓸 수 있어요. "
+                             "(✎ 표시는 자동 검사 없이 AI에게만 전달되는 조건)",
+              font=_f(11), bg=PANEL_BG, fg="#666", justify="center").pack(pady=(0, 8))
 
         body = Frame(self.win, bg=PANEL_BG)
         body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -280,7 +437,9 @@ class ConditionsWindow:
     def _refresh(self):
         self.lb.delete(0, END)
         for c in self.conds:
-            self.lb.insert(END, cond_mod.to_text(c))
+            # ✎ = 서술형(자동 검사 없이 AI에게 전달만 되는 조건)
+            mark = "✎ " if c.get("type") == "text" else ""
+            self.lb.insert(END, mark + cond_mod.to_text(c))
 
     def _sel(self):
         s = self.lb.curselection()
@@ -289,7 +448,8 @@ class ConditionsWindow:
     def _add(self):
         res = _ConditionForm(self.win).result
         if res:
-            self.conds.append(res)
+            # 서술형 문장 하나가 여러 조건으로 풀릴 수 있다
+            self.conds.extend(res if isinstance(res, list) else [res])
             self._save()
 
     def _edit(self):
@@ -299,7 +459,7 @@ class ConditionsWindow:
             return
         res = _ConditionForm(self.win, self.conds[i]).result
         if res:
-            self.conds[i] = res
+            self.conds[i:i + 1] = res if isinstance(res, list) else [res]
             self._save()
 
     def _delete(self):
@@ -328,12 +488,13 @@ class _ConditionForm:
         self.win = Toplevel(parent)
         self.win.title("조건")
         self.win.configure(bg=PANEL_BG)
-        _center(self.win, 380, 320, parent)
+        _center(self.win, 430, 380, parent)
         self.win.transient(parent)
         _grab(self.win)
 
+        # 새 조건은 '서술형'을 기본으로 — 문장으로 바로 쓸 수 있게
         self.v_type = StringVar(value=cond_mod.TYPE_LABELS[cond["type"]] if cond
-                                else cond_mod.TYPE_LABELS["menu_count"])
+                                else cond_mod.TYPE_LABELS["text"])
         Label(self.win, text="조건 종류", font=_f(12), bg=PANEL_BG).pack(anchor="w", padx=24, pady=(14, 0))
         OptionMenu(self.win, self.v_type, *cond_mod.TYPE_LABELS.values(),
                    command=lambda *_: self._build_fields()).pack(fill="x", padx=24)
@@ -367,7 +528,19 @@ class _ConditionForm:
             Label(self.fields, text=text, font=_f(12), bg=PANEL_BG).pack(anchor="w", pady=(6, 0))
             widget.pack(fill="x")
 
-        if t == "menu_count":
+        if t == "text":
+            Label(self.fields, text="조건을 문장으로 적어 주세요.", font=_f(12),
+                  bg=PANEL_BG).pack(anchor="w", pady=(6, 0))
+            Label(self.fields, text="예) 비빔밥은 일요일에만 넣어줘\n"
+                                    "     수육은 점심에만 내고 월 2회 이하로",
+                  font=_f(11), bg=PANEL_BG, fg="#666", justify="left")\
+                .pack(anchor="w", pady=(0, 4))
+            self.t_text = Text(self.fields, height=4, font=_f(12), wrap="word",
+                               relief="solid", bd=1)
+            self.t_text.pack(fill="x")
+            self.t_text.insert("1.0", c.get("text", ""))
+            self.t_text.focus_set()
+        elif t == "menu_count":
             self.v_menu = StringVar(value=c.get("menu", ""))
             self.v_op = StringVar(value=self.OP_FROM.get(c.get("op", "<="), "이하"))
             self.v_count = StringVar(value=str(c.get("count", 2)))
@@ -379,6 +552,21 @@ class _ConditionForm:
             self.v_section = StringVar(value=c.get("section", "중식"))
             labeled("메뉴 이름", Entry(self.fields, textvariable=self.v_menu, font=_f(12)))
             labeled("편성 끼니", OptionMenu(self.fields, self.v_section, "중식", "석식"))
+        elif t == "menu_weekday":
+            self.v_menu = StringVar(value=c.get("menu", ""))
+            labeled("메뉴 이름", Entry(self.fields, textvariable=self.v_menu, font=_f(12)))
+            Label(self.fields, text="이 요일에만 편성 (여러 개 고를 수 있어요)",
+                  font=_f(12), bg=PANEL_BG).pack(anchor="w", pady=(10, 0))
+            picked = set(c.get("weekdays") or [])
+            box = Frame(self.fields, bg=PANEL_BG)
+            box.pack(fill="x")
+            self.v_wdays = {}
+            for n, wd in enumerate(cond_mod.WEEKDAYS):
+                var = BooleanVar(value=(wd in picked))
+                self.v_wdays[wd] = var
+                Checkbutton(box, text=wd, font=_f(12), bg=PANEL_BG, variable=var,
+                            selectcolor="white", activebackground=PANEL_BG)\
+                    .grid(row=0, column=n, padx=2)
         elif t == "menu_gap":
             self.v_menu = StringVar(value=c.get("menu", ""))
             self.v_days = StringVar(value=str(c.get("days", 7)))
@@ -400,6 +588,36 @@ class _ConditionForm:
     def _ok(self):
         t = self._type_key()
         out = {"type": t}
+
+        if t == "text":
+            raw = self.t_text.get("1.0", END).strip()
+            if not raw:
+                messagebox.showwarning("확인", "조건 문장을 입력하세요.", parent=self.win)
+                return
+            parsed = cond_mod.parse_text(raw)
+            if parsed:
+                lines = "\n".join(f"  • {cond_mod.to_text(p)}" for p in parsed)
+                ans = messagebox.askyesnocancel(
+                    "이렇게 이해했어요",
+                    f"{lines}\n\n"
+                    "[예]  이 조건으로 저장 — 지켜졌는지 프로그램이 자동으로 검사하고,\n"
+                    "        어기면 다시 만듭니다. (권장)\n\n"
+                    "[아니오]  쓴 문장 그대로 저장 — AI에게 전달만 되고 자동 검사는 없습니다.\n\n"
+                    "[취소]  문장 다시 고치기",
+                    parent=self.win)
+                if ans is None:
+                    return
+                self.result = parsed if ans else {"type": "text", "text": raw}
+            else:
+                messagebox.showinfo(
+                    "문장 그대로 저장할게요",
+                    "이 문장은 자동 검사까지는 어려워서 AI에게 그대로 전달합니다.\n"
+                    "꼭 지켜지게 하려면 위 ‘조건 종류’를 바꿔 항목으로 넣어 주세요.",
+                    parent=self.win)
+                self.result = {"type": "text", "text": raw}
+            self.win.destroy()
+            return
+
         if t in ("menu_count", "menu_section", "menu_gap"):
             menu = self.v_menu.get().strip()
             if not menu:
@@ -414,6 +632,12 @@ class _ConditionForm:
             out["count"] = n
         elif t == "menu_section":
             out["section"] = self.v_section.get()
+        elif t == "menu_weekday":
+            wds = [wd for wd in cond_mod.WEEKDAYS if self.v_wdays[wd].get()]
+            if not wds:
+                messagebox.showwarning("확인", "요일을 하나 이상 고르세요.", parent=self.win)
+                return
+            out["weekdays"] = wds
         elif t == "menu_gap":
             n = self._int(self.v_days, "최소 간격")
             if n is None:

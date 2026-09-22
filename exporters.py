@@ -10,6 +10,10 @@
     · 주방형(preset='주방형') : 가로 A4, 주 단위 4행 블록(요일/날짜/중식/석식).
         구분=Arial 24굵게, 중식=D9D2E9·석식=FCE5CD, 날짜헤더=CFE2F3, 메뉴=F3F3F3.
 - 인쇄(Windows: 메모장 인쇄 동사 / 그 외 안내)
+
+⚠ 아래 수치는 실제 운영 파일 '식단표_EXCEL/7월식단표.xlsx' 의 시트
+   '배달-26.07' / '주방-26.07' 에서 그대로 뽑은 값이다(모든 월 시트가 동일).
+   메뉴 글자가 잘리지 않는 건 '열 너비'가 전적으로 결정하므로 임의로 줄이지 말 것.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ import unicodedata
 from menu_planner import parse_menu_text
 import layouts
 from layouts import (
-    PRESET_KITCHEN, SECTIONS, ITEMS_PER_MEAL, WEEKDAYS_KR,
+    PRESET_KITCHEN, SECTIONS, WEEKDAYS_KR,
     FOOTER_NOTE, MonthData, build_month_data, calendar_weeks,
 )
 
@@ -38,7 +42,17 @@ PEACH = "FFFCE5CD"        # 석식
 TEAL = "FFD0E0E3"         # 배달 빈칸
 BLUE = "FFCFE2F3"         # 주방 날짜헤더
 FOOTER_TEXT = "\n" + FOOTER_NOTE
-WD = WEEKDAYS_KR          # 일~토
+
+# 엑셀 요일 머리글은 원본과 같이 '일요일'…'토요일' 전체 표기(GUI 미리보기는 '일'…'토').
+WD = [w + "요일" for w in WEEKDAYS_KR]
+
+# 시트 기본값 — 원본 sheetFormatPr
+DEFAULT_COL_W = 12.63
+DEFAULT_ROW_H = 15.75
+
+# 제목/요일/날짜 등 머리글 행 높이(메뉴 행은 내용에 맞춰 계산한다)
+DLV_ROW_H_HEAD = 37.5     # 배달형: 제목/요일/날짜 행
+KIT_ROW_H_HEAD = 33.75    # 주방형: 요일/날짜 행
 
 # 메뉴 열 너비(엑셀 단위). 기존 13 → 넓혀서 줄바꿈/행높이를 줄인다.
 # (넓혀서 종이 폭을 넘어도 _page 의 fitToWidth 로 인쇄는 1페이지 폭에 맞춰짐)
@@ -160,22 +174,28 @@ def _merge_box(ws, r1, c1, r2, c2, value, *, font, size, bold=False, color=TXT,
 
 
 def _page(ws, landscape):
+    """원본 시트의 pageSetup/printOptions/sheetFormatPr 를 그대로 재현."""
     from openpyxl.worksheet.page import PageMargins
     from openpyxl.worksheet.properties import PageSetupProperties
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
     ws.page_setup.paperSize = 9  # A4
     ws.page_margins = PageMargins(left=0 if landscape else 0.7,
                                   right=0 if landscape else 0.7,
-                                  top=0.75, bottom=0.75)
+                                  top=0.75, bottom=0.75, header=0.0, footer=0.0)
     # 넓힌 열이 종이 폭을 넘어도 인쇄 시 '1페이지 폭'에 자동으로 맞춘다(세로는 여러 장 허용).
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+    # 원본: <printOptions gridLines="1" horizontalCentered="1"/>
+    ws.print_options.horizontalCentered = True
+    ws.print_options.gridLines = True
+    ws.sheet_format.defaultColWidth = DEFAULT_COL_W
+    ws.sheet_format.defaultRowHeight = DEFAULT_ROW_H
 
 
 # ---- 배달형(달력형): 세로 A4, 한 시트에 중식/석식 ----
 def _xlsx_delivery(wb, md: MonthData) -> None:
-    ws = wb.create_sheet("배달")
+    ws = wb.create_sheet(f"배달-{md.year % 100:02d}.{md.month:02d}")
     for c in "ABCDEFG":  # 요일 7칸 균일하게 넓힘
         ws.column_dimensions[c].width = MENU_COL_WIDTH
     _page(ws, landscape=False)
@@ -193,14 +213,14 @@ def _delivery_section(ws, md, section, weeks, r):
     _merge_box(ws, r, 1, r + 2, 7, f"{md.month}월 식단표 ({section})",
                font=FONT_HEAD, size=60, color=None)
     for k in range(3):
-        ws.row_dimensions[r + k].height = 37.5
+        ws.row_dimensions[r + k].height = DLV_ROW_H_HEAD
     r += 3
 
-    # 요일 헤더 (Arial 29 굵게, F3F3F3)
+    # 요일 헤더 (Arial 29 굵게, F3F3F3, 세로정렬 지정 없음 = 원본과 동일)
     for ci, wd in enumerate(WD, start=1):
         _set(ws, r, ci, wd, font=FONT_HEAD, size=29, bold=True, color=None,
-             fill=GRAY, valign="center")
-    ws.row_dimensions[r].height = 37.5
+             fill=GRAY, valign=None)
+    ws.row_dimensions[r].height = DLV_ROW_H_HEAD
     r += 1
 
     # 주별: 날짜행 + 메뉴행
@@ -208,11 +228,13 @@ def _delivery_section(ws, md, section, weeks, r):
         for ci, day in enumerate(week, start=1):
             _set(ws, r, ci, (day or None), font=FONT_BODY, size=29, bold=True,
                  fill=(GRAY if day else TEAL), valign="center")
-        ws.row_dimensions[r].height = 37.5
+        ws.row_dimensions[r].height = DLV_ROW_H_HEAD
         vals = []
         for ci, day in enumerate(week, start=1):
             has = day and md.has_meal(day, section)
-            val = "\n\n".join(md.get(day, section)) if has else None
+            items = md.get(day, section) if has else []
+            val = "\n\n".join(items) if has else None
+            # wrap=True 여야 엑셀이 셀 안의 줄바꿈을 그대로 보여준다.
             _set(ws, r + 1, ci, val, font=FONT_BODY, size=26,
                  fill=(menu_fill if day else TEAL), valign="top", wrap=True)
             vals.append(val)
@@ -224,13 +246,13 @@ def _delivery_section(ws, md, section, weeks, r):
     _merge_box(ws, r, 1, r + 2, 7, FOOTER_TEXT, font=FONT_HEAD, size=29,
                bold=True, color=None, halign=None, valign="top")
     for k in range(3):
-        ws.row_dimensions[r + k].height = 37.5
+        ws.row_dimensions[r + k].height = DLV_ROW_H_HEAD
     return r + 3
 
 
 # ---- 주방형: 가로 A4, 주 단위 4행 블록 ----
 def _xlsx_kitchen(wb, md: MonthData) -> None:
-    ws = wb.create_sheet("주방")
+    ws = wb.create_sheet(f"주방-{md.year % 100:02d}.{md.month:02d}")
     ws.column_dimensions["A"].width = 13.0        # '구분' 라벨 열
     for c in "BCDEFGH":                            # 요일 7칸 균일하게 넓힘
         ws.column_dimensions[c].width = MENU_COL_WIDTH
@@ -246,11 +268,11 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
                    color=None, fill=GRAY)
         for ci, wd in enumerate(WD):
             _set(ws, r, ci + 2, wd, font=FONT_HEAD, size=24, bold=True, color=None,
-                 fill=BLUE, valign="center")
+                 fill=BLUE, valign=None)
             _set(ws, r + 1, ci + 2, (week[ci] or None), font=FONT_BODY, size=24,
                  bold=True, fill=BLUE, valign="top")
-        ws.row_dimensions[r].height = 33.8
-        ws.row_dimensions[r + 1].height = 33.8
+        ws.row_dimensions[r].height = KIT_ROW_H_HEAD
+        ws.row_dimensions[r + 1].height = KIT_ROW_H_HEAD
 
         # 중식/석식 행
         for k, section in enumerate(SECTIONS):
@@ -260,7 +282,8 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
             vals = []
             for ci, day in enumerate(week):
                 has = day and md.has_meal(day, section)
-                val = "\n\n".join(md.get(day, section)) if has else None
+                items = md.get(day, section) if has else []
+                val = "\n\n".join(items) if has else None
                 _set(ws, rr, ci + 2, val, font=FONT_BODY, size=24, fill=GRAY,
                      valign="top", wrap=True)
                 vals.append(val)

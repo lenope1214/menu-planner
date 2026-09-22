@@ -25,6 +25,8 @@ from tkinter import font as tkfont
 
 import app_config
 import exporters
+import history
+import history_window
 import layouts
 import store
 import settings_windows
@@ -51,6 +53,15 @@ C_DINNER = "#FCE4D6"   # 주방형 석식
 C_GRID = "#B7B7B7"     # 표 격자선
 
 
+def next_month(today: date | None = None) -> tuple[int, int]:
+    """오늘 기준 ‘다음 달’(12월이면 다음 해 1월).
+
+    식단표는 늘 다가올 달치를 미리 만들므로 연/월 기본값을 여기에 맞춘다.
+    """
+    d = today or date.today()
+    return (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
+
+
 class MenuPlannerApp:
     def __init__(self, root: Tk):
         self.root = root
@@ -62,8 +73,7 @@ class MenuPlannerApp:
         self._busy = False
         self.month_data: layouts.MonthData | None = None
         self._cells: list[tuple[Entry, int, str, int]] = []  # (entry, day, section, idx)
-        today = date.today()
-        self.cur_year, self.cur_month = today.year, today.month
+        self.cur_year, self.cur_month = next_month()
 
         self._build_fonts()
         self._build_layout()
@@ -162,6 +172,36 @@ class MenuPlannerApp:
                     activebackground=PANEL_BG, wraplength=290, justify="left", anchor="w")\
             .pack(fill="x", pady=(8, 0))
 
+        # 일시정지 중인 메뉴는 잊기 쉬우니 메인 화면에 계속 보여준다
+        self.box_menu = box_r
+        self.var_paused = StringVar(value="")
+        self.lbl_paused = Label(box_r, textvariable=self.var_paused, font=self.f_label,
+                                bg=PANEL_BG, fg="#C62828", wraplength=290,
+                                justify="left", anchor="w")
+        self._refresh_paused()
+
+        # 과거 식단 기록 — 실제로 냈던 식단을 쌓아 두고 다음 달 만들 때 참고한다
+        box_h = LabelFrame(content, text=" 과거 식단 기록 ", font=self.f_label,
+                           bg=PANEL_BG, fg="#333", padx=12, pady=10)
+        box_h.pack(fill="x", padx=16, pady=8)
+        Button(box_h, text="📅 과거 식단 입력 / 보기", font=self.f_button, bg="#FFFFFF",
+               relief="raised", pady=8, command=self.open_history).pack(fill="x")
+        self.var_hist_sum = StringVar(value="")
+        Label(box_h, textvariable=self.var_hist_sum, font=self.f_label, bg=PANEL_BG,
+              fg="#2E7D32", wraplength=290, justify="left", anchor="w")\
+            .pack(fill="x", pady=(6, 4))
+        self.var_hmode = StringVar(value=store.get_history_mode())
+        for mid in history.MODES:
+            Radiobutton(box_h, text=history.MODE_LABELS[mid], value=mid,
+                        variable=self.var_hmode, command=self._on_history_mode,
+                        font=self.f_label, bg=PANEL_BG, fg="#333", anchor="w",
+                        selectcolor="white", activebackground=PANEL_BG,
+                        wraplength=280, justify="left").pack(fill="x", pady=1)
+        Button(box_h, text="📌 지금 표를 기록에 저장", font=self.f_button, bg="#FFFFFF",
+               relief="raised", pady=6, command=self.on_save_history)\
+            .pack(fill="x", pady=(8, 0))
+        self._refresh_history()
+
         # AI 모델 선택(하드코딩 대신 목록에서 선택 → 모델 중단 시에도 교체 가능)
         boxm = LabelFrame(content, text=" AI 모델 ", font=self.f_label,
                           bg=PANEL_BG, fg="#333", padx=12, pady=10)
@@ -180,14 +220,16 @@ class MenuPlannerApp:
                           bg=PANEL_BG, fg="#333", padx=12, pady=12)
         box1.pack(fill="x", padx=16, pady=8)
 
-        today = date.today()
-        self.var_year = StringVar(value=str(today.year))
-        self.var_month = StringVar(value=str(today.month))
+        # 기본값은 '오늘 기준 다음 달' (지난 달치를 만들 일은 없으므로)
+        ny, nm = next_month()
+        self.var_year = StringVar(value=str(ny))
+        self.var_month = StringVar(value=str(nm))
 
         row = Frame(box1, bg=PANEL_BG)
         row.pack(fill="x", pady=4)
         Label(row, text="연도", font=self.f_label, bg=PANEL_BG).pack(side="left")
-        OptionMenu(row, self.var_year, *[str(y) for y in range(today.year, today.year + 3)])\
+        OptionMenu(row, self.var_year,
+                   *[str(y) for y in range(date.today().year, ny + 2)])\
             .pack(side="left", padx=(6, 14))
         Label(row, text="월", font=self.f_label, bg=PANEL_BG).pack(side="left")
         OptionMenu(row, self.var_month, *[str(m) for m in range(1, 13)])\
@@ -236,7 +278,7 @@ class MenuPlannerApp:
 
     # --- 메뉴/조건 설정 ---
     def open_menu_settings(self):
-        settings_windows.MenuSettingsWindow(self.root)
+        settings_windows.MenuSettingsWindow(self.root, on_close=self._refresh_paused)
 
     def open_conditions(self):
         settings_windows.ConditionsWindow(self.root)
@@ -244,13 +286,23 @@ class MenuPlannerApp:
     def open_examples(self):
         settings_windows.ExamplesWindow(self.root)
 
+    def _refresh_paused(self):
+        """일시정지 중인 메뉴 목록을 오른쪽 패널에 표시(없으면 줄 자체를 숨김)."""
+        names = store.paused_summary()
+        if names:
+            self.var_paused.set("⏸ 지금 빼둔 메뉴: " + ", ".join(names))
+            self.lbl_paused.pack(fill="x", pady=(8, 0))
+        else:
+            self.var_paused.set("")
+            self.lbl_paused.pack_forget()
+
     def _on_pool_only(self):
         store.set_pool_only(bool(self.var_pool_only.get()))
 
     # --- AI 모델 선택 ---
     def _initial_models(self) -> list[str]:
         """드롭다운 초기 목록(저장된 모델 + 기본 대체목록). API 조회 전 표시용."""
-        seen = list(dict.fromkeys([store.get_model(), *FALLBACK_MODELS]))
+        seen = list(dict.fromkeys([store.get_model(), *MODEL_CHOICES]))
         return [m for m in seen if m]
 
     def _set_model_options(self, models: list[str]):
@@ -279,6 +331,38 @@ class MenuPlannerApp:
                             f"모델 {len(models)}개 불러옴. 원하는 모델을 선택하세요.")
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # --- 과거 식단 기록 ---
+    def open_history(self):
+        history_window.HistoryWindow(self.root, on_close=self._refresh_history)
+
+    def _refresh_history(self):
+        self.var_hist_sum.set("📚 " + history.summary())
+
+    def _on_history_mode(self):
+        mode = self.var_hmode.get()
+        if mode == history.MODE_ONLY and history.day_count() == 0:
+            messagebox.showinfo(
+                "기록이 필요해요",
+                "‘과거에 냈던 메뉴만으로 만들기’는 기록이 쌓여야 쓸 수 있어요.\n"
+                "먼저 [과거 식단 입력 / 보기]에서 지난 식단을 넣어 주세요.")
+            self.var_hmode.set(store.get_history_mode())
+            return
+        store.set_history_mode(mode)
+
+    def on_save_history(self):
+        """화면의 표(수정한 내용 포함)를 그대로 과거 기록에 넣는다."""
+        if not self._has_content():
+            return
+        self._flush_cells()
+        y, m = self.cur_year, self.cur_month
+        if not messagebox.askyesno(
+                "기록에 저장", f"지금 화면의 {y}년 {m}월 식단표를 ‘실제로 낸 식단’으로 "
+                              f"기록할까요?\n(같은 날짜의 기존 기록은 덮어씁니다)"):
+            return
+        n = history.save_month(self.month_data, merge=True)
+        self._refresh_history()
+        self.var_status.set(f"{y}년 {m}월 식단을 기록에 저장했어요. (총 {n}일치)")
 
     # ====================== 왼쪽: 미리보기 ======================
     def _build_left_preview(self):
@@ -459,16 +543,28 @@ class MenuPlannerApp:
             messagebox.showerror("조건/메뉴 충돌",
                                  "아래 때문에 식단표를 만들 수 없어요:\n\n" + "\n".join(conflicts))
             return
-        mpool = store.pool_to_menupool(pool_dict)
+        mpool = store.pool_to_menupool(pool_dict)   # 일시정지 메뉴는 빠진 풀
+        paused = store.paused_names()               # 프롬프트/검증용 금지 목록
         examples = store.get_examples() if store.get_use_examples() else None
         model = (self.var_model.get() or "").strip() or store.get_model()
         store.set_model(model)
 
-        self.cur_year, self.cur_month = int(self.var_year.get()), int(self.var_month.get())
+        year, month = int(self.var_year.get()), int(self.var_month.get())
+
+        # 과거 식단 기록 — 프롬프트 참고 + 달 경계 간격/과거 메뉴 제한 검증
+        hmode = self.var_hmode.get()
+        if hmode == history.MODE_ONLY and history.day_count() == 0:
+            messagebox.showerror("기록이 없어요",
+                                 "‘과거에 냈던 메뉴만으로 만들기’를 골랐는데 기록이 없습니다.\n"
+                                 "[과거 식단 입력 / 보기]에서 지난 식단을 먼저 넣어 주세요.")
+            return
+        hist_block = history.prompt_block(year, month, hmode)
+        hist_recent = history.recent_tail(year, month) if hmode != history.MODE_OFF else None
+        hist_names = history.all_names() or None if hmode == history.MODE_ONLY else None
+
+        self.cur_year, self.cur_month = year, month
         self._set_busy(True)
         self.var_status.set("식단표를 만들고 있어요... 잠시만 기다려 주세요.")
-
-        year, month = self.cur_year, self.cur_month
 
         def worker():
             try:
@@ -476,6 +572,9 @@ class MenuPlannerApp:
                     year, month, model=model,
                     api_key=app_config.get_api_key(), pool=mpool,
                     conditions=conds, pool_only=pool_only, examples=examples,
+                    paused=paused,
+                    history_block=hist_block, history_recent=hist_recent,
+                    history_names=hist_names,
                     progress=lambda msg: self.root.after(0, self.var_status.set, msg),
                 )
                 self.root.after(0, self._on_done, text, errors)
@@ -495,7 +594,8 @@ class MenuPlannerApp:
                 "대부분 규칙은 맞췄지만 아래 항목은 확인해 주세요:\n\n" + "\n".join(errors[:8]),
             )
         else:
-            self.var_status.set("완성! 모든 규칙 통과. 칸을 클릭해 수정할 수 있어요.")
+            self.var_status.set("완성! 모든 규칙 통과. 칸을 클릭해 수정할 수 있어요.\n"
+                                "이대로 냈다면 [지금 표를 기록에 저장]도 눌러 주세요.")
 
     def _on_error(self, msg: str):
         self._set_busy(False)
@@ -555,7 +655,7 @@ class MenuPlannerApp:
 
 # 지연 import(메뉴 생성은 실제 사용 시점에만 필요)
 from menu_planner import (  # noqa: E402
-    generate_validated_menu, list_available_models, FALLBACK_MODELS,
+    generate_validated_menu, list_available_models, MODEL_CHOICES,
 )
 
 

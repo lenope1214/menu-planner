@@ -6,13 +6,20 @@
 config.json
 config.json.bak
 config.json.tmp
-# 사용자 메뉴/조건/예시 데이터(런타임 생성)
+# 사용자 메뉴/조건/예시/설정 데이터(런타임 생성, GitHub 동기화 대상은 별도 데이터 레포)
 menu_pool.json
 conditions.json
 examples.json
+settings.json
+history.json
 
 # Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# PyInstaller 빌드 산출물
+build/
+dist/
+*.spec
