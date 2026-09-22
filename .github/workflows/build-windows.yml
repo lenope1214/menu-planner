@@ -9,10 +9,32 @@ on:
     paths:
       - "**.py"
       - "requirements.txt"
+      - "requirements-dev.txt"
       - ".github/workflows/build-windows.yml"
 
 jobs:
+  # 규칙 검증·엑셀 서식·과거 기록 회귀 테스트. 여기서 실패하면 exe 빌드까지 가지 않는다.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: 파이썬 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 테스트 실행
+        run: pytest -q
+
   build:
+    needs: test          # 테스트 통과해야 빌드
     runs-on: windows-latest
     steps:
       - name: 소스 체크아웃

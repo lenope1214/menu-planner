@@ -13,7 +13,7 @@
     pip install -r requirements.txt
     export GEMINI_API_KEY="..."
     python menu_planner.py 2026 7
-    python menu_planner.py 2026 7 --model gemini-2.5-flash --dry-run
+    python menu_planner.py 2026 7 --model gemini-3.6-flash --dry-run
 """
 
 from __future__ import annotations
@@ -31,7 +31,46 @@ from menu_data import MenuPool, default_pool, render_pool_for_prompt
 import conditions as cond_mod
 
 # ----------------------------------------------------------------------------
-# 0. 도메인 상수 (규칙 검증 및 프롬프트 주입에 공통 사용)
+# 0. 모델 상수
+# ----------------------------------------------------------------------------
+# Gemini 2.5 계열은 신규 사용자에게 지원 종료(404 "no longer available to new
+# users")되었다. 모델은 앞으로도 주기적으로 은퇴하므로, 기본 모델이 막히면
+# MODEL_FALLBACKS 를 순서대로 자동 재시도해 프로그램이 멈추지 않게 한다.
+DEFAULT_MODEL = "gemini-3.6-flash"
+
+# CLI/설정에서 고를 수 있는 모델. Pro 계열은 무료 API 키에 할당량이 없어
+# (429 RESOURCE_EXHAUSTED) 기본 목록에서 제외했다.
+MODEL_CHOICES = [
+    "gemini-3.6-flash",       # 기본 - 최신 Flash
+    "gemini-3.5-flash",
+    "gemini-flash-latest",    # 항상 최신 Flash 를 가리키는 별칭
+    "gemini-3.1-flash-lite",  # 가장 빠름/저렴, 품질은 낮음
+    "gemini-pro-latest",      # 유료 키에서만 동작
+]
+
+# 지원 종료(404)/할당량 초과(429) 시 순서대로 대체 시도할 모델
+MODEL_FALLBACKS = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+]
+
+
+def _model_chain(model: str) -> list[str]:
+    """지정 모델을 먼저, 그 뒤에 중복 없는 대체 모델을 잇는다."""
+    return [model] + [m for m in MODEL_FALLBACKS if m != model]
+
+
+def _is_model_unavailable(exc: Exception) -> bool:
+    """해당 모델만의 문제(지원 종료/할당량)라서 다른 모델로 넘어갈 만한 오류인가."""
+    msg = str(exc)
+    return ("NOT_FOUND" in msg or "RESOURCE_EXHAUSTED" in msg
+            or "no longer available" in msg or "404" in msg or "429" in msg)
+
+
+# ----------------------------------------------------------------------------
+# 0-1. 도메인 상수 (규칙 검증 및 프롬프트 주입에 공통 사용)
 # ----------------------------------------------------------------------------
 
 WEEKDAY_KR = ["월", "화", "수", "목", "금", "토", "일"]  # date.weekday() 0=월 ... 6=일
@@ -200,6 +239,13 @@ SYSTEM_INSTRUCTION = f"""\
 [메뉴 선택]
 14. 아래 '허용 메뉴 풀' 위주로 선택하고 각 메뉴의 속성/제한(끼니, 평일만, 월최대 등)을 지킨다.
     풀로 다양성이 부족할 때만 동일 스타일의 한식 메뉴로 보충한다.
+15. '사용 금지 메뉴' 목록이 주어지면, 그 메뉴는 물론 이름이 겹치는 변형까지
+    (예: '쭈꾸미' 금지 → '쭈꾸미볶음'·'매운쭈꾸미'도 금지) 메인·반찬·국 어디에도 쓰지 않는다.
+
+[과거 식단 기록]
+16. '과거 실제 식단 기록'이 주어지면 그 구성·이름 표기 방식을 그대로 따른다.
+    지난달 말에 나온 메인은 이번 달 초에 다시 넣지 않는다(달이 바뀌어도 4일 간격 유지).
+    '과거에 냈던 메뉴만 사용' 지시가 붙으면 목록 밖의 이름은 한 개도 만들지 않는다.
 
 [출력 포맷] (조사/불필요한 줄바꿈 없이, 날짜 사이 빈 줄 없음)
 [중식]
@@ -225,11 +271,14 @@ FEWSHOT_EXAMPLE = """\
 
 
 def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction: str = "",
-                      conditions: list | None = None, pool_only: bool = False) -> str:
+                      conditions: list | None = None, pool_only: bool = False,
+                      paused: list[str] | None = None, history_block: str = "") -> str:
     """달력 골격 + 허용 메뉴 풀 + 규칙/조건 리마인드를 담은 사용자 프롬프트.
 
     correction: 직전 결과의 위반 목록(있으면 재생성 보정 지시로 덧붙임).
     conditions: 사용자 조건 리스트. pool_only: 풀의 메뉴만 사용.
+    paused: 일시정지(당분간 사용 불가) 메뉴 이름 목록.
+    history_block: 과거 실제 식단 기록 블록(history.prompt_block()).
     """
     pool = pool or default_pool()
     fix_block = ""
@@ -242,10 +291,18 @@ def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction:
     cond_block = ("\n\n" + cond_block) if cond_block else ""
     pool_block = ("\n\n[메뉴 제한] 위 ‘허용 메뉴 풀’에 있는 메뉴만 사용하세요. "
                   "풀에 없는 메인/반찬/국은 절대 만들지 마세요.") if pool_only else ""
+    paused_block = ""
+    if paused:
+        paused_block = (
+            "\n\n[⛔ 사용 금지 메뉴] 아래 메뉴는 당분간 낼 수 없습니다. "
+            "메인·반찬·국 어느 자리에도, 이름이 겹치는 변형까지 절대 쓰지 마세요.\n"
+            + ", ".join(paused)
+        )
+    hist_block = ("\n\n" + history_block) if history_block else ""
     return (
         f"{FEWSHOT_EXAMPLE}\n"
         f"위 형식을 그대로 따라 '{plan.title}' 식단표를 생성하세요.\n\n"
-        f"{render_pool_for_prompt(pool)}{pool_block}\n\n"
+        f"{render_pool_for_prompt(pool)}{pool_block}{paused_block}{hist_block}\n\n"
         f"아래는 채워야 할 운영일 골격입니다(각 날짜 속성 포함). "
         f"전달된 날짜는 전부 중식·석식을 채우고, '조리용이메뉴' 태그가 붙은 날은 "
         f"난이도 낮은 메뉴로 배치하세요.\n\n"
@@ -262,7 +319,7 @@ def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction:
 def generate_menu(
     year: int,
     month: int,
-    model: str = "gemini-2.5-pro",
+    model: str = DEFAULT_MODEL,
     api_key: str | None = None,
     temperature: float = 0.8,
     closed_days: set[int] | None = None,
@@ -270,11 +327,17 @@ def generate_menu(
     correction: str = "",
     conditions: list | None = None,
     pool_only: bool = False,
+    paused: list[str] | None = None,
+    history_block: str = "",
+    progress=None,
 ) -> str:
     """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다.
 
     closed_days: 예외 휴무일(일자 집합). pool: 허용 메뉴 풀(미지정 시 시드 사용).
     correction: 재생성 보정 지시(규칙 위반 목록).
+    paused: 일시정지 메뉴(프롬프트에 사용 금지로 명시).
+    history_block: 과거 실제 식단 기록(history.prompt_block()).
+    지정 모델이 지원 종료/할당량 초과면 MODEL_FALLBACKS 로 자동 대체한다.
     """
     # 신규 google-genai SDK 사용 (from google import genai)
     from google import genai
@@ -287,24 +350,43 @@ def generate_menu(
     plan = build_month_plan(year, month, closed_days=closed_days)
     client = genai.Client(api_key=api_key)
 
-    response = client.models.generate_content(
-        model=model,
-        contents=build_user_prompt(plan, pool=pool, correction=correction,
-                                   conditions=conditions, pool_only=pool_only),
-        config=types.GenerateContentConfig(
-            # 데이터 정형성을 위한 System Instruction 설정 부분
-            system_instruction=SYSTEM_INSTRUCTION,
-            temperature=temperature,
-            top_p=0.9,
-        ),
+    contents = build_user_prompt(plan, pool=pool, correction=correction,
+                                 conditions=conditions, pool_only=pool_only,
+                                 paused=paused, history_block=history_block)
+    config = types.GenerateContentConfig(
+        # 데이터 정형성을 위한 System Instruction 설정 부분
+        system_instruction=SYSTEM_INSTRUCTION,
+        temperature=temperature,
+        top_p=0.9,
     )
-    return (response.text or "").strip()
+
+    chain = _model_chain(model)
+    last_exc: Exception | None = None
+    for i, name in enumerate(chain):
+        try:
+            response = client.models.generate_content(
+                model=name, contents=contents, config=config,
+            )
+            return (response.text or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            if not _is_model_unavailable(exc):
+                raise  # 네트워크/키 오류 등은 모델을 바꿔도 소용없다
+            last_exc = exc
+            if i + 1 < len(chain) and progress:
+                progress(f"{name} 사용 불가 → {chain[i + 1]} 모델로 다시 시도합니다")
+
+    raise RuntimeError(
+        "사용할 수 있는 Gemini 모델이 없습니다.\n"
+        f"시도한 모델: {', '.join(chain)}\n"
+        "API 키의 사용량 한도를 넘었거나, 모델이 모두 지원 종료되었을 수 있어요.\n"
+        f"(마지막 오류: {last_exc})"
+    )
 
 
 def generate_validated_menu(
     year: int,
     month: int,
-    model: str = "gemini-2.5-flash",
+    model: str = DEFAULT_MODEL,
     api_key: str | None = None,
     temperature: float = 0.8,
     closed_days: set[int] | None = None,
@@ -313,11 +395,17 @@ def generate_validated_menu(
     progress=None,
     conditions: list | None = None,
     pool_only: bool = False,
+    paused: list[str] | None = None,
+    history_block: str = "",
+    history_recent: list | None = None,
+    history_names: set[str] | None = None,
 ) -> tuple[str, list[str]]:
     """검증을 통과할 때까지(최대 max_retries회) 재생성한다.
 
     반환: (식단표 텍스트, 남은 위반 목록).  위반이 비어 있으면 완전 통과.
     progress: 진행 상황을 받을 콜백 (예: GUI 상태표시). progress(str) 형태.
+    history_block/recent/names: 과거 식단 기록 — 프롬프트용 텍스트,
+    달 경계 검증용 직전 기록, ‘과거 메뉴만’ 검증용 이름 집합.
     """
     correction = ""
     text = ""
@@ -328,9 +416,13 @@ def generate_validated_menu(
         text = generate_menu(
             year, month, model=model, api_key=api_key, temperature=temperature,
             closed_days=closed_days, pool=pool, correction=correction,
-            conditions=conditions, pool_only=pool_only,
+            conditions=conditions, pool_only=pool_only, paused=paused,
+            history_block=history_block, progress=progress,
         )
-        errors = validate_menu(text, conditions=conditions, pool=pool, pool_only=pool_only)
+        errors = validate_menu(text, conditions=conditions, pool=pool,
+                               pool_only=pool_only, paused=paused,
+                               history_recent=history_recent,
+                               history_names=history_names)
         if not errors:
             if progress:
                 progress("완료: 모든 규칙 통과")
@@ -397,8 +489,17 @@ def _day_index(date_label: str) -> int:
 
 
 def validate_menu(text: str, conditions: list | None = None,
-                  pool: MenuPool | None = None, pool_only: bool = False) -> list[str]:
-    """규칙(형식) + 사용자 조건 + ‘추가 메뉴만’ 위반 목록(빈 리스트 = 통과)."""
+                  pool: MenuPool | None = None, pool_only: bool = False,
+                  paused: list[str] | None = None,
+                  history_recent: list | None = None,
+                  history_names: set[str] | None = None) -> list[str]:
+    """규칙(형식) + 사용자 조건 + ‘추가 메뉴만’ + 일시정지 + 과거 기록 위반 목록.
+
+    history_recent: history.recent_tail() 결과 [(상대일, 끼니, 메인, 날짜표기)].
+        상대일은 '이번 달 1일 = 1' 기준이라 생성 결과의 일(day) 과 바로 뺄 수 있다.
+    history_names: 과거에 실제로 쓴 메뉴 이름 집합('과거 메뉴만' 모드일 때만).
+    빈 리스트 = 통과.
+    """
     errors: list[str] = []
     meals = parse_menu_text(text)
     if not meals:
@@ -434,6 +535,60 @@ def validate_menu(text: str, conditions: list | None = None,
             if main and not any(main == n or n in main or main in n for n in names):
                 errors.append(f"[{m.section} {m.date_label}] 풀에 없는 메인 '{main}'")
 
+    # (5) 일시정지 메뉴(메인뿐 아니라 반찬/국 자리까지 전부 검사)
+    if paused:
+        hits: dict[str, list[str]] = {}
+        for m in meals:
+            for item in m.items:
+                for p in paused:
+                    if cond_mod.name_matches(p, item):
+                        hits.setdefault(p, []).append(f"{m.section} {m.date_label}")
+                        break
+        for p, where in hits.items():
+            errors.append(
+                f"일시정지 메뉴 ‘{p}’ 를 {len(where)}번 썼습니다 "
+                f"(예: {', '.join(where[:3])}). 다른 메뉴로 바꾸세요."
+            )
+
+    # (6) 달 경계 — 지난달 말에 낸 메인이 이번 달 초에 바로 또 나오는 경우.
+    #     (2)번은 같은 달 안에서만 보므로, 과거 기록이 있을 때만 이어서 검사한다.
+    if history_recent:
+        for section in ("중식", "석식"):
+            prev = [(rel, main, label) for rel, sec, main, label in history_recent
+                    if sec == section and main]
+            if not prev:
+                continue
+            flagged: set[str] = set()
+            for m in [x for x in meals if x.section == section]:
+                if not m.main or m.main in flagged:
+                    continue
+                di = _day_index(m.date_label)
+                for rel, main, label in prev:
+                    if cond_mod.name_matches(main, m.main) and di - rel < 4:
+                        errors.append(
+                            f"[{section}] 메인 '{m.main}' 은(는) 지난달 {label}에 냈는데 "
+                            f"{m.date_label}에 또 나옵니다(4일 이내). 다른 메인으로 바꾸세요."
+                        )
+                        flagged.add(m.main)
+                        break
+
+    # (7) ‘과거에 냈던 메뉴만 사용’ — 기록에 없는 이름은 전부 모아 한 번에 알린다
+    if history_names:
+        unknown: set[str] = set()
+        for m in meals:
+            for item in m.items:
+                if not item or item == KIMCHI_LABEL:
+                    continue
+                if not any(cond_mod.name_matches(n, item) for n in history_names):
+                    unknown.add(item)
+        if unknown:
+            names = ", ".join(sorted(unknown)[:12])
+            more = f" 외 {len(unknown) - 12}개" if len(unknown) > 12 else ""
+            errors.append(
+                f"과거 기록에 없는 메뉴를 {len(unknown)}개 썼습니다: {names}{more}. "
+                f"과거에 냈던 메뉴로만 채우세요."
+            )
+
     return errors
 
 
@@ -445,32 +600,46 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="한식 뷔페 식단표 생성기")
     parser.add_argument("year", type=int, help="연도 (예: 2026)")
     parser.add_argument("month", type=int, help="월 (예: 7)")
-    parser.add_argument("--model", default="gemini-2.5-pro",
-                        choices=["gemini-2.5-pro", "gemini-2.5-flash"])
+    parser.add_argument("--model", default=DEFAULT_MODEL, choices=MODEL_CHOICES)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--closed-days", default="",
                         help="예외 휴무일(쉼표구분 일자). 예: --closed-days 17,18 (설날 등)")
+    parser.add_argument("--use-history", default="ref", choices=["off", "ref", "only"],
+                        help="과거 식단 기록 활용: off=무시 / ref=참고(기본) / only=과거 메뉴만")
     parser.add_argument("--dry-run", action="store_true",
                         help="API 호출 없이 달력 골격/프롬프트만 출력")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
+    # history 는 layouts→menu_planner 를 거쳐 이 모듈을 import 하므로 여기서 늦게 부른다
+    import history
+
     closed_days = {int(x) for x in args.closed_days.split(",") if x.strip()}
     plan = build_month_plan(args.year, args.month, closed_days=closed_days)
+    hist_block = history.prompt_block(args.year, args.month, args.use_history)
+    hist_recent = (history.recent_tail(args.year, args.month)
+                   if args.use_history != history.MODE_OFF else None)
+    hist_names = (history.all_names() or None
+                  if args.use_history == history.MODE_ONLY else None)
 
     if args.dry_run:
         print(f"=== {plan.title} 운영일 골격 ===")
         print(render_template_hint(plan))
         print("\n=== 허용 메뉴 풀 ===")
         print(render_pool_for_prompt(default_pool()))
+        if hist_block:
+            print("\n=== 과거 식단 기록 ===")
+            print(hist_block)
         print("\n=== System Instruction ===")
         print(SYSTEM_INSTRUCTION)
         return 0
 
     text = generate_menu(args.year, args.month, model=args.model,
-                         temperature=args.temperature, closed_days=closed_days)
+                         temperature=args.temperature, closed_days=closed_days,
+                         history_block=hist_block)
     print(text)
 
-    errors = validate_menu(text)
+    errors = validate_menu(text, history_recent=hist_recent,
+                           history_names=hist_names)
     if errors:
         print("\n=== ⚠ 규칙 위반 검출 (재생성 권장) ===", file=sys.stderr)
         for e in errors:
