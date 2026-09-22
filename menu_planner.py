@@ -293,6 +293,47 @@ def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction:
 # 3. Gemini API 호출
 # ----------------------------------------------------------------------------
 
+# 기본 모델 및 API 조회 실패 시 대체 목록(하드코딩 최소화 — 실제 목록은 API 에서 받아온다)
+DEFAULT_MODEL = "gemini-2.5-flash"
+FALLBACK_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-flash-latest",
+    "gemini-pro-latest",
+    "gemini-2.0-flash",
+]
+
+
+def list_available_models(api_key: str | None = None) -> list[str]:
+    """generateContent 를 지원하는 Gemini 모델 ID 목록을 API 에서 가져온다.
+
+    키가 없거나 조회 실패 시 FALLBACK_MODELS 를 반환한다(생성 중단 방지).
+    """
+    api_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return list(FALLBACK_MODELS)
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=api_key)
+        out: list[str] = []
+        for m in client.models.list():
+            name = (getattr(m, "name", "") or "")
+            short = name.split("/")[-1]
+            if not short.startswith("gemini") or "embedding" in short:
+                continue
+            actions = (getattr(m, "supported_actions", None)
+                       or getattr(m, "supported_generation_methods", None) or [])
+            # 액션 정보를 못 읽으면(빈 목록) 일단 포함(방어적)
+            if actions and "generateContent" not in actions:
+                continue
+            out.append(short)
+        out = sorted(set(out))
+        return out or list(FALLBACK_MODELS)
+    except Exception:
+        return list(FALLBACK_MODELS)
+
+
 def generate_menu(
     year: int,
     month: int,
@@ -480,16 +521,28 @@ def validate_menu(text: str, conditions: list | None = None,
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="한식 뷔페 식단표 생성기")
-    parser.add_argument("year", type=int, help="연도 (예: 2026)")
-    parser.add_argument("month", type=int, help="월 (예: 7)")
-    parser.add_argument("--model", default="gemini-2.5-pro",
-                        choices=["gemini-2.5-pro", "gemini-2.5-flash"])
+    parser.add_argument("year", type=int, nargs="?", help="연도 (예: 2026)")
+    parser.add_argument("month", type=int, nargs="?", help="월 (예: 7)")
+    parser.add_argument("--model", default=DEFAULT_MODEL,
+                        help="사용할 Gemini 모델 ID (예: gemini-2.5-flash). "
+                             "--list-models 로 사용 가능한 모델 확인")
+    parser.add_argument("--list-models", action="store_true",
+                        help="사용 가능한 모델 목록을 출력하고 종료")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--closed-days", default="",
                         help="예외 휴무일(쉼표구분 일자). 예: --closed-days 17,18 (설날 등)")
     parser.add_argument("--dry-run", action="store_true",
                         help="API 호출 없이 달력 골격/프롬프트만 출력")
     args = parser.parse_args(list(argv) if argv is not None else None)
+
+    if args.list_models:
+        print("사용 가능한 모델:")
+        for m in list_available_models():
+            print(f"  - {m}")
+        return 0
+
+    if args.year is None or args.month is None:
+        parser.error("연도와 월을 입력하세요. (예: python menu_planner.py 2026 7)")
 
     closed_days = {int(x) for x in args.closed_days.split(",") if x.strip()}
     plan = build_month_plan(args.year, args.month, closed_days=closed_days)
