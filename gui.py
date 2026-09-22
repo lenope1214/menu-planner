@@ -69,6 +69,9 @@ class MenuPlannerApp:
         self._build_layout()
         self._render_preview()
         self._check_key_on_start()
+        # 키가 있으면 시작 시 실제 사용 가능한 모델 목록을 백그라운드로 불러온다
+        if app_config.get_api_key():
+            self._refresh_models()
 
     # --- 폰트 ---
     def _build_fonts(self):
@@ -159,6 +162,19 @@ class MenuPlannerApp:
                     activebackground=PANEL_BG, wraplength=290, justify="left", anchor="w")\
             .pack(fill="x", pady=(8, 0))
 
+        # AI 모델 선택(하드코딩 대신 목록에서 선택 → 모델 중단 시에도 교체 가능)
+        boxm = LabelFrame(content, text=" AI 모델 ", font=self.f_label,
+                          bg=PANEL_BG, fg="#333", padx=12, pady=10)
+        boxm.pack(fill="x", padx=16, pady=8)
+        self.var_model = StringVar(value=store.get_model())
+        self.model_menu = OptionMenu(boxm, self.var_model, self.var_model.get())
+        self.model_menu.config(font=self.f_label)
+        self.model_menu.pack(fill="x")
+        Button(boxm, text="🔄 모델 목록 새로고침", font=self.f_label, bg="#FFFFFF",
+               relief="raised", command=self._refresh_models)\
+            .pack(fill="x", pady=(6, 0))
+        self._set_model_options(self._initial_models())
+
         # 연/월 + 만들기
         box1 = LabelFrame(content, text=" 식단표 만들기 ", font=self.f_label,
                           bg=PANEL_BG, fg="#333", padx=12, pady=12)
@@ -230,6 +246,39 @@ class MenuPlannerApp:
 
     def _on_pool_only(self):
         store.set_pool_only(bool(self.var_pool_only.get()))
+
+    # --- AI 모델 선택 ---
+    def _initial_models(self) -> list[str]:
+        """드롭다운 초기 목록(저장된 모델 + 기본 대체목록). API 조회 전 표시용."""
+        seen = list(dict.fromkeys([store.get_model(), *FALLBACK_MODELS]))
+        return [m for m in seen if m]
+
+    def _set_model_options(self, models: list[str]):
+        """OptionMenu 항목을 교체한다. 현재 선택이 목록에 없으면 첫 항목으로."""
+        if not models:
+            return
+        menu = self.model_menu["menu"]
+        menu.delete(0, "end")
+        for mdl in models:
+            menu.add_command(label=mdl, command=lambda v=mdl: self._select_model(v))
+        if self.var_model.get() not in models:
+            self._select_model(models[0])
+
+    def _select_model(self, value: str):
+        self.var_model.set(value)
+        store.set_model(value)
+
+    def _refresh_models(self):
+        """API 에서 사용 가능한 모델 목록을 백그라운드로 받아 드롭다운을 갱신."""
+        self.var_status.set("모델 목록을 불러오는 중...")
+
+        def worker():
+            models = list_available_models(app_config.get_api_key())
+            self.root.after(0, self._set_model_options, models)
+            self.root.after(0, self.var_status.set,
+                            f"모델 {len(models)}개 불러옴. 원하는 모델을 선택하세요.")
+
+        threading.Thread(target=worker, daemon=True).start()
 
     # ====================== 왼쪽: 미리보기 ======================
     def _build_left_preview(self):
@@ -412,6 +461,8 @@ class MenuPlannerApp:
             return
         mpool = store.pool_to_menupool(pool_dict)
         examples = store.get_examples() if store.get_use_examples() else None
+        model = (self.var_model.get() or "").strip() or store.get_model()
+        store.set_model(model)
 
         self.cur_year, self.cur_month = int(self.var_year.get()), int(self.var_month.get())
         self._set_busy(True)
@@ -422,7 +473,7 @@ class MenuPlannerApp:
         def worker():
             try:
                 text, errors = generate_validated_menu(
-                    year, month, model="gemini-2.5-flash",
+                    year, month, model=model,
                     api_key=app_config.get_api_key(), pool=mpool,
                     conditions=conds, pool_only=pool_only, examples=examples,
                     progress=lambda msg: self.root.after(0, self.var_status.set, msg),
@@ -503,7 +554,9 @@ class MenuPlannerApp:
 
 
 # 지연 import(메뉴 생성은 실제 사용 시점에만 필요)
-from menu_planner import generate_validated_menu  # noqa: E402
+from menu_planner import (  # noqa: E402
+    generate_validated_menu, list_available_models, FALLBACK_MODELS,
+)
 
 
 def main():

@@ -136,6 +136,14 @@ def set_use_examples(v: bool) -> None:
     app_config.set_setting("use_examples", bool(v))
 
 
+def get_model() -> str:
+    return app_config.get_setting("model", "gemini-2.5-flash") or "gemini-2.5-flash"
+
+
+def set_model(v: str) -> None:
+    app_config.set_setting("model", (v or "").strip() or "gemini-2.5-flash")
+
+
 # ---- 충돌 점검(생성 전) ----
 
 def check_conflicts(pool: dict, conds: list[dict], pool_only: bool) -> list[str]:
