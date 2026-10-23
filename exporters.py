@@ -233,7 +233,7 @@ def _delivery_section(ws, md, section, weeks, r):
         for ci, day in enumerate(week, start=1):
             has = day and md.has_meal(day, section)
             items = md.get(day, section) if has else []
-            val = "\n\n".join(items) if has else None
+            val = "\n".join(items) if has else None
             # wrap=True 여야 엑셀이 셀 안의 줄바꿈을 그대로 보여준다.
             _set(ws, r + 1, ci, val, font=FONT_BODY, size=26,
                  fill=(menu_fill if day else TEAL), valign="top", wrap=True)
@@ -283,7 +283,7 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
             for ci, day in enumerate(week):
                 has = day and md.has_meal(day, section)
                 items = md.get(day, section) if has else []
-                val = "\n\n".join(items) if has else None
+                val = "\n".join(items) if has else None
                 _set(ws, rr, ci + 2, val, font=FONT_BODY, size=24, fill=GRAY,
                      valign="top", wrap=True)
                 vals.append(val)
