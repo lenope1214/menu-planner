@@ -420,9 +420,11 @@ def check_conflicts(pool: dict, conds: list[dict], pool_only: bool) -> list[str]
     main_names = [m["name"] for m in live["mains"]]
     if not main_names:
         errors.append("메뉴 풀에 쓸 수 있는 메인 요리가 없습니다. ‘메뉴 설정’에서 먼저 등록하세요.")
+    # 조건은 반찬·국에도 걸 수 있으므로 세 갈래 이름을 모두 본다
+    live_names = main_names + list(live["sides"]) + list(live["soups"])
     for c in conds:
         mn = c.get("menu")
-        if mn and not any(cond_mod.name_matches(mn, n) for n in main_names) \
+        if mn and not any(cond_mod.name_matches(mn, n) for n in live_names) \
                 and not any(cond_mod.name_matches(mn, n) for n in all_paused):
             errors.append(f"조건 ‘{cond_mod.to_text(c)}’의 메뉴가 풀에 없습니다 "
                           f"(‘추가된 메뉴만 사용’ 켜짐).")

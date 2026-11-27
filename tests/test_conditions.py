@@ -141,3 +141,46 @@ def test_생선류_월_최대_위반():
 def test_기본_조건은_모두_사람이_읽을_수_있다():
     for c in cond.default_conditions():
         assert cond.to_text(c) and not cond.to_text(c).startswith("{")
+
+
+# ---- 조건은 메인뿐 아니라 반찬·국 자리에도 걸린다 ----
+
+def test_반찬에_건_횟수_조건을_잡는다():
+    c = {"type": "menu_count", "menu": "계란찜", "op": "<=", "count": 1}
+    meals = _meals(line("7/1(수)", "제육볶음", sides=["계란찜", "감자조림", "오이무침"]),
+                   line("7/2(목)", "불고기", sides=["계란찜", "감자조림", "오이무침"]))
+    errs = cond.validate(meals, [c])
+    assert any("현재 2회" in e and "7/2(목)" in e for e in errs)     # 어긴 날짜까지 알려준다
+
+
+def test_국에_건_끼니_조건을_잡는다():
+    c = {"type": "menu_section", "menu": "미역국", "section": "석식"}
+    errs = cond.validate(_meals(line("7/1(수)", "제육볶음", soup="미역국")), [c])
+    assert any("중식 7/1(수)" in e for e in errs)
+
+
+def test_반찬으로_나온_생선도_센다():
+    c = {"type": "category_max", "category": "생선류", "max": 0}
+    meals = _meals(line("7/1(수)", "제육볶음", sides=["고등어조림", "감자조림", "오이무침"]))
+    assert cond.validate(meals, [c])
+
+
+def test_횟수_조건은_더_긴_이름에만_걸린다():
+    """‘불고기’ 조건은 ‘고추장불고기’를 세지만, ‘배추된장국’ 조건이 ‘된장국’을 세지는 않는다."""
+    assert cond.item_has("불고기", "고추장불고기")
+    assert not cond.item_has("배추된장국", "된장국")
+    assert not cond.item_has("무", "무국")
+
+
+def test_요일_조건은_표기가_아니라_실제_달력으로_본다():
+    """모델이 수요일(7/1)을 ‘일’로 적어 내면 표기만 믿는 검사는 통과해 버린다."""
+    c = {"type": "menu_weekday", "menu": "비빔밥", "weekdays": ["일"]}
+    meals = _meals(line("7/1(일)", "비빔밥"))
+    assert cond.validate(meals, [c]) == []                         # 연/월을 모르면 표기를 믿는다
+    assert cond.validate(meals, [c], year=2026, month=7)           # 알면 실제 요일(수)로 잡는다
+    assert cond.validate(_meals(line("7/5(일)", "비빔밥")), [c], year=2026, month=7) == []
+
+
+def test_조건_블록은_우선순위를_밝힌다():
+    block = cond.conditions_prompt(cond.default_conditions())
+    assert "우선" in block and "1. " in block

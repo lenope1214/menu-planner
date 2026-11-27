@@ -131,3 +131,72 @@ def test_금지메뉴와_과거기록이_프롬프트에_실린다():
                              history_block="[과거] 6/30(화): 수육")
     assert "쭈꾸미" in p
     assert "6/30(화): 수육" in p
+
+
+# ---- 달력 대조(연/월을 넘겼을 때) ----
+
+def _full_month(year=2026, month=7, skip=(), relabel=None):
+    """4일 간격 규칙에 걸리지 않게 메인을 돌려 가며 채운 한 달치."""
+    mains = ["제육볶음", "불고기", "닭갈비", "돈까스", "오리훈제"]
+    plan = mp.build_month_plan(year, month)
+    rows = []
+    for s in plan.days:
+        if s.d.day in skip:
+            continue
+        label = (relabel or {}).get(s.d.day, s.label)
+        rows.append(line(label, mains[s.d.day % len(mains)]))
+    return text(lunch=rows, dinner=rows)
+
+
+def test_한_달을_다_채우면_달력_검사를_통과한다():
+    assert mp.validate_menu(_full_month(), year=2026, month=7) == []
+
+
+def test_출력이_끊겨_빠진_날짜를_잡는다():
+    errs = mp.validate_menu(_full_month(skip={30, 31}), year=2026, month=7)
+    assert any("빠진 날짜 2일" in e and "7/30(목)" in e for e in errs)
+
+
+def test_휴무일은_빠져도_된다():
+    assert mp.validate_menu(_full_month(skip={15}), year=2026, month=7, closed_days={15}) == []
+
+
+def test_틀리게_적은_요일을_잡는다():
+    errs = mp.validate_menu(_full_month(relabel={1: "7/1(일)"}), year=2026, month=7)
+    assert any("7/1(일) → 7/1(수)" in e for e in errs)
+
+
+def test_같은_날짜를_두_번_적으면_잡는다():
+    t = text(lunch=[line("7/1(수)", "제육볶음"), line("7/1(수)", "불고기")])
+    assert any("두 번" in e for e in mp.validate_menu(t))
+
+
+# ---- 다시 만들기: 위반만 고치고, 가장 나은 결과를 고른다 ----
+
+def test_다시_만들_때는_직전_식단표와_위반_목록을_함께_준다():
+    plan = mp.build_month_plan(2026, 7)
+    p = mp.build_user_prompt(plan, correction="- 수육은 중식에만", previous="[중식]\\n7/1(수): 수육")
+    assert "[직전 식단표]" in p and "[위반 목록]" in p and "그대로 두세요" in p
+    assert "[직전 식단표]" not in mp.build_user_prompt(plan)
+
+
+def test_끝내_못_맞추면_위반이_가장_적은_결과를_돌려준다(monkeypatch):
+    good = _full_month()
+    one_bad = _full_month(skip={31})                      # 위반 2건(중식·석식 31일 누락)
+    worse = _full_month(skip={29, 30, 31}, relabel={1: "7/1(일)"})
+    outputs = iter([one_bad, worse, worse, worse])
+    calls = []
+
+    def fake(year, month, **kw):
+        calls.append(kw)
+        return next(outputs)
+
+    monkeypatch.setattr(mp, "generate_menu", fake)
+    out, errs = mp.generate_validated_menu(2026, 7, api_key="x")
+    assert out == one_bad and len(errs) == 2              # 마지막(worse)이 아니라 가장 나은 것
+    assert calls[0]["previous"] == "" and calls[1]["previous"] == one_bad
+    assert "빠진 날짜" in calls[1]["correction"]
+    assert calls[1]["temperature"] < calls[0]["temperature"]   # 재시도는 더 보수적으로
+
+    monkeypatch.setattr(mp, "generate_menu", lambda y, m, **kw: good)
+    assert mp.generate_validated_menu(2026, 7, api_key="x") == (good, [])

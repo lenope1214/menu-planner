@@ -227,6 +227,8 @@ SYSTEM_INSTRUCTION = f"""\
 8. '{FRIED_CHICKEN}': '평일 중식'에만 편성, 한 달에 정확히 2회.
 9. '{JJUKKUMI}': 한 달 최소 1회~최대 2회, 연속 등장 금지(최소 1주 건너뜀).
 10. 생선류(고등어/조기/굴비/가자미/열기 등): 단가·조리 특성상 한 달 총합 4회 이하로 엄격 제한.
+※ 7~10번은 기본값이다. 사용자 메시지의 '[반드시 지켜야 할 추가 조건]'에 같은 메뉴·같은 항목에
+   대한 조건이 있으면 그 조건이 이 기본값보다 우선한다(횟수·끼니·요일이 다르면 조건 쪽을 따른다).
 
 [맛/조리 편의]
 11. 점심(중식)은 자극적이고 든든한 맛, 저녁(석식)은 깔끔하고 담백한 맛으로 배치.
@@ -246,6 +248,12 @@ SYSTEM_INSTRUCTION = f"""\
 16. '과거 실제 식단 기록'이 주어지면 그 구성·이름 표기 방식을 그대로 따른다.
     지난달 말에 나온 메인은 이번 달 초에 다시 넣지 않는다(달이 바뀌어도 4일 간격 유지).
     '과거에 냈던 메뉴만 사용' 지시가 붙으면 목록 밖의 이름은 한 개도 만들지 않는다.
+
+[조건 우선순위]
+17. '[반드시 지켜야 할 추가 조건]'은 위 모든 규칙·참고 예시·과거 식단 기록보다 우선한다.
+    예시나 과거 기록에 조건과 어긋나는 편성이 있어도 따라 하지 않는다.
+18. 날짜와 요일은 전달된 골격의 표기(M/D(요일))를 한 글자도 바꾸지 않고 그대로 쓴다.
+    골격의 모든 날짜를 [중식]·[석식] 양쪽에 한 번씩, 빠뜨리거나 중복 없이 적는다.
 
 [출력 포맷] (조사/불필요한 줄바꿈 없이, 날짜 사이 빈 줄 없음)
 [중식]
@@ -302,7 +310,8 @@ def render_examples_prompt(examples: list | None) -> str:
 def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction: str = "",
                       conditions: list | None = None, pool_only: bool = False,
                       examples: list | None = None,
-                      paused: list[str] | None = None, history_block: str = "") -> str:
+                      paused: list[str] | None = None, history_block: str = "",
+                      previous: str = "") -> str:
     """달력 골격 + 허용 메뉴 풀 + 규칙/조건 + 예시(few-shot)를 담은 사용자 프롬프트.
 
     correction: 직전 결과의 위반 목록(있으면 재생성 보정 지시로 덧붙임).
@@ -310,10 +319,23 @@ def build_user_prompt(plan: MonthPlan, pool: MenuPool | None = None, correction:
     examples: 참고 식단표 예시(스타일 모방용).
     paused: 일시정지(당분간 사용 불가) 메뉴 이름 목록.
     history_block: 과거 실제 식단 기록 블록(history.prompt_block()).
+    previous: 직전에 만든 식단표. 주면 '처음부터 새로'가 아니라 '위반만 고치기'로 지시한다
+        (통째로 다시 만들면 고친 자리 대신 다른 자리에서 새 위반이 생기기 쉽다).
     """
     pool = pool or default_pool()
     fix_block = ""
-    if correction:
+    if correction and previous:
+        fix_block = (
+            "\n\n[다시 만들기 — 직전 식단표의 위반만 고치기]\n"
+            "아래 ‘직전 식단표’는 대부분 괜찮지만 ‘위반 목록’의 문제가 있습니다.\n"
+            "· 위반 목록에 적힌 날짜·메뉴만 바꾸고, 나머지 날짜는 직전 식단표 그대로 두세요.\n"
+            "· 고치면서 다른 규칙(6개 메뉴, 김치류 1개, 같은 메인 4일 간격, 추가 조건)을 "
+            "새로 어기지 않는지 바꾼 날짜 앞뒤를 확인하세요.\n"
+            "· 빠진 날짜가 있으면 채우고, 식단표 전체를 처음부터 끝까지 다시 출력하세요.\n"
+            f"\n[위반 목록]\n{correction}\n"
+            f"\n[직전 식단표]\n{previous}\n"
+        )
+    elif correction:
         fix_block = (
             "\n\n[직전 결과에서 아래 위반이 발견되었습니다. 반드시 모두 고쳐 다시 생성하세요]\n"
             f"{correction}\n"
@@ -400,6 +422,7 @@ def generate_menu(
     paused: list[str] | None = None,
     history_block: str = "",
     progress=None,
+    previous: str = "",
 ) -> str:
     """연/월을 받아 Gemini 를 호출하고 식단표 텍스트를 반환한다.
 
@@ -423,7 +446,8 @@ def generate_menu(
     contents = build_user_prompt(plan, pool=pool, correction=correction,
                                  conditions=conditions, pool_only=pool_only,
                                  examples=examples,
-                                 paused=paused, history_block=history_block)
+                                 paused=paused, history_block=history_block,
+                                 previous=previous)
     config = types.GenerateContentConfig(
         # 데이터 정형성을 위한 System Instruction 설정 부분
         system_instruction=SYSTEM_INSTRUCTION,
@@ -462,7 +486,7 @@ def generate_validated_menu(
     temperature: float = 0.8,
     closed_days: set[int] | None = None,
     pool: MenuPool | None = None,
-    max_retries: int = 2,
+    max_retries: int = 3,
     progress=None,
     conditions: list | None = None,
     pool_only: bool = False,
@@ -472,40 +496,46 @@ def generate_validated_menu(
     history_recent: list | None = None,
     history_names: set[str] | None = None,
 ) -> tuple[str, list[str]]:
-    """검증을 통과할 때까지(최대 max_retries회) 재생성한다.
+    """검증을 통과할 때까지(최대 max_retries회) 고쳐 만든다.
 
     반환: (식단표 텍스트, 남은 위반 목록).  위반이 비어 있으면 완전 통과.
     progress: 진행 상황을 받을 콜백 (예: GUI 상태표시). progress(str) 형태.
     history_block/recent/names: 과거 식단 기록 — 프롬프트용 텍스트,
     달 경계 검증용 직전 기록, ‘과거 메뉴만’ 검증용 이름 집합.
+
+    조건이 새지 않게 하는 장치:
+    - 재시도는 '처음부터 새로'가 아니라 지금까지 가장 나은 결과를 주고 위반만 고치게 한다.
+    - 재시도마다 temperature 를 낮춰 지시를 더 그대로 따르게 한다.
+    - 끝내 다 못 맞추면 마지막 결과가 아니라 위반이 가장 적었던 결과를 돌려준다.
     """
-    correction = ""
-    text = ""
-    errors: list[str] = []
+    best_text, best_errors = "", None
     for attempt in range(1, max_retries + 2):  # 최초 1회 + 재시도 max_retries회
         if progress:
-            progress(f"식단표 생성 중... (시도 {attempt})")
+            progress(f"식단표 생성 중... (시도 {attempt})" if attempt == 1 else
+                     f"조건에 어긋난 {len(best_errors)}건을 고치는 중... (시도 {attempt})")
         text = generate_menu(
-            year, month, model=model, api_key=api_key, temperature=temperature,
-            closed_days=closed_days, pool=pool, correction=correction,
+            year, month, model=model, api_key=api_key,
+            temperature=max(0.2, temperature - 0.25 * (attempt - 1)),
+            closed_days=closed_days, pool=pool,
+            correction="\n".join(f"- {e}" for e in best_errors or []),
+            previous=best_text,
             conditions=conditions, pool_only=pool_only, examples=examples,
             paused=paused, history_block=history_block, progress=progress,
         )
         errors = validate_menu(text, conditions=conditions, pool=pool,
                                pool_only=pool_only, paused=paused,
                                history_recent=history_recent,
-                               history_names=history_names)
-        if not errors:
+                               history_names=history_names,
+                               year=year, month=month, closed_days=closed_days)
+        if best_errors is None or len(errors) < len(best_errors):
+            best_text, best_errors = text, errors
+        if not best_errors:
             if progress:
                 progress("완료: 모든 규칙 통과")
-            return text, []
-        # 위반을 보정 지시로 만들어 다음 시도에 반영
-        correction = "\n".join(f"- {e}" for e in errors)
-        if progress:
-            progress(f"규칙 위반 {len(errors)}건 → 보정 후 재생성")
+            return best_text, []
     if progress:
-        progress(f"완료(일부 규칙 미충족 {len(errors)}건)")
-    return text, errors
+        progress(f"완료(일부 규칙 미충족 {len(best_errors)}건)")
+    return best_text, best_errors
 
 
 # ----------------------------------------------------------------------------
@@ -566,12 +596,16 @@ def validate_menu(text: str, conditions: list | None = None,
                   pool: MenuPool | None = None, pool_only: bool = False,
                   paused: list[str] | None = None,
                   history_recent: list | None = None,
-                  history_names: set[str] | None = None) -> list[str]:
+                  history_names: set[str] | None = None,
+                  year: int | None = None, month: int | None = None,
+                  closed_days: set[int] | None = None) -> list[str]:
     """규칙(형식) + 사용자 조건 + ‘추가 메뉴만’ + 일시정지 + 과거 기록 위반 목록.
 
     history_recent: history.recent_tail() 결과 [(상대일, 끼니, 메인, 날짜표기)].
         상대일은 '이번 달 1일 = 1' 기준이라 생성 결과의 일(day) 과 바로 뺄 수 있다.
     history_names: 과거에 실제로 쓴 메뉴 이름 집합('과거 메뉴만' 모드일 때만).
+    year/month(+closed_days): 주면 달력과 대조한다 — 빠진 날짜·중복·틀린 요일 표기.
+        (출력이 중간에 끊기거나 요일을 틀리게 적으면 다른 검사가 전부 통과해 버린다.)
     빈 리스트 = 통과.
     """
     errors: list[str] = []
@@ -586,6 +620,38 @@ def validate_menu(text: str, conditions: list | None = None,
         if m.items.count(KIMCHI_LABEL) != 1:
             errors.append(f"[{m.section} {m.date_label}] '{KIMCHI_LABEL}' 정확히 1개여야 함: {m.raw}")
 
+    # (1-2) 달력 대조: 끼니 구역 / 중복 / 빠진 날짜 / 틀린 요일
+    stray = [m for m in meals if m.section not in ("중식", "석식")]
+    if stray:
+        errors.append(f"[중식]/[석식] 구역 밖에 적힌 줄이 {len(stray)}개 있습니다: {stray[0].raw}")
+    for section in ("중식", "석식"):
+        days = [_day_index(m.date_label) for m in meals if m.section == section]
+        dup = sorted({d for d in days if days.count(d) > 1})
+        if dup:
+            errors.append(f"[{section}] 같은 날짜가 두 번 적혔습니다: "
+                          + ", ".join(f"{d}일" for d in dup[:8]))
+    if year and month:
+        plan = build_month_plan(year, month, closed_days=closed_days)
+        want = {s_.d.day: s_.label for s_ in plan.days if s_.is_operating}
+        wrong = sorted({m.date_label for m in meals
+                        if _day_index(m.date_label) in want
+                        and m.date_label != want[_day_index(m.date_label)]})
+        if wrong:
+            fix = ", ".join(f"{w} → {want[_day_index(w)]}" for w in wrong[:6])
+            errors.append(f"날짜·요일 표기가 달력과 다른 줄이 {len(wrong)}개 있습니다({fix}). "
+                          f"골격의 표기를 그대로 쓰세요.")
+        for section in ("중식", "석식"):
+            have = {_day_index(m.date_label) for m in meals if m.section == section}
+            missing = [want[d] for d in sorted(want) if d not in have]
+            extra = sorted(have - set(want))
+            if missing:
+                more = f" 외 {len(missing) - 8}일" if len(missing) > 8 else ""
+                errors.append(f"[{section}] 빠진 날짜 {len(missing)}일: "
+                              + ", ".join(missing[:8]) + more)
+            if extra:
+                errors.append(f"[{section}] 이 달에 없거나 휴무인 날짜: "
+                              + ", ".join(f"{d}일" for d in extra[:8]))
+
     # (2) 동일 메인 4일 이내 재등장 금지(섹션별)
     for section in ("중식", "석식"):
         seen: dict[str, int] = {}
@@ -599,7 +665,7 @@ def validate_menu(text: str, conditions: list | None = None,
 
     # (3) 사용자 조건
     if conditions:
-        errors.extend(cond_mod.validate(meals, conditions))
+        errors.extend(cond_mod.validate(meals, conditions, year=year, month=month))
 
     # (4) ‘추가된 메뉴만 사용’(메인 기준)
     if pool_only and pool is not None:
@@ -720,15 +786,22 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(SYSTEM_INSTRUCTION)
         return 0
 
-    text = generate_menu(args.year, args.month, model=args.model,
-                         temperature=args.temperature, closed_days=closed_days,
-                         history_block=hist_block)
+    # GUI 와 같은 조건·일시정지 목록을 쓴다(store 도 이 모듈을 거쳐 import 되므로 늦게 부른다)
+    import store
+    conds = store.get_conditions()
+    paused = store.paused_names()
+
+    text, errors = generate_validated_menu(
+        args.year, args.month, model=args.model,
+        temperature=args.temperature, closed_days=closed_days,
+        conditions=conds, paused=paused,
+        history_block=hist_block, history_recent=hist_recent, history_names=hist_names,
+        progress=lambda msg: print(f"… {msg}", file=sys.stderr),
+    )
     print(text)
 
-    errors = validate_menu(text, history_recent=hist_recent,
-                           history_names=hist_names)
     if errors:
-        print("\n=== ⚠ 규칙 위반 검출 (재생성 권장) ===", file=sys.stderr)
+        print("\n=== ⚠ 끝내 맞추지 못한 규칙/조건 ===", file=sys.stderr)
         for e in errors:
             print(f" - {e}", file=sys.stderr)
         return 1

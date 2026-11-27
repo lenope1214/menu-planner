@@ -593,10 +593,14 @@ class MenuPlannerApp:
         self._render_preview()
         self._set_busy(False)
         if errors:
-            self.var_status.set(f"완성했어요. 규칙 {len(errors)}건은 표에서 직접 확인해 주세요.")
+            self.var_status.set(f"⚠ 조건 {len(errors)}건을 맞추지 못했어요. "
+                                "표에서 직접 고치거나 [식단표 만들기]를 다시 눌러 주세요.")
+            more = f"\n… 외 {len(errors) - 8}건" if len(errors) > 8 else ""
             messagebox.showwarning(
-                "일부 규칙 안내",
-                "대부분 규칙은 맞췄지만 아래 항목은 확인해 주세요:\n\n" + "\n".join(errors[:8]),
+                "지키지 못한 조건이 있어요",
+                f"여러 번 고쳐 만들었지만 아래 {len(errors)}건은 끝내 맞추지 못했습니다.\n"
+                "표에서 해당 날짜를 직접 고치거나, [식단표 만들기]를 다시 눌러 주세요.\n\n"
+                + "\n".join(f"· {e}" for e in errors[:8]) + more,
             )
         else:
             self.var_status.set("완성! 모든 규칙 통과. 칸을 클릭해 수정할 수 있어요.\n"

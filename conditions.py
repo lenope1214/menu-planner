@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import datetime
 import re
 
 # 카테고리(키워드 기반)
@@ -69,9 +70,46 @@ def name_matches(pattern: str, text: str) -> bool:
     p, t = (pattern or "").strip(), (text or "").strip()
     if not p or not t:
         return False
-    if len(p) < 2:
+    if len(p) < 2 or len(t) < 2:
         return p == t
     return p in t or t in p
+
+
+def item_has(menu: str, item: str) -> bool:
+    """조건의 메뉴가 그 칸에 들어 있는가(조건 검사용, 한 방향).
+
+    ‘불고기’ 조건은 ‘고추장불고기’ 칸에 걸리지만, ‘배추된장국’ 조건이 ‘된장국’ 칸에
+    걸리지는 않는다. 횟수를 세는 검사라 name_matches 보다 엄격하게 본다.
+    """
+    p, t = (menu or "").strip(), (item or "").strip()
+    if not p or not t:
+        return False
+    return p == t if len(p) < 2 else p in t
+
+
+def _hits(menu: str, meals) -> list:
+    """그 메뉴가 메인·반찬·국 어느 자리든 들어간 끼니들."""
+    return [m for m in meals if any(item_has(menu, it) for it in m.items)]
+
+
+def _where(ms, limit: int = 4) -> str:
+    """위반 위치를 ‘중식 7/1(수), 석식 7/3(금)’ 처럼 적는다(다시 만들 때 고칠 곳을 알려주려고)."""
+    out = ", ".join(f"{m.section} {m.date_label}" for m in ms[:limit])
+    return out + (f" 외 {len(ms) - limit}건" if len(ms) > limit else "")
+
+
+def _real_wday(m, year: int | None, month: int | None) -> str:
+    """그 날짜의 실제 요일. 연/월을 모르면 표기된 요일을 믿는다.
+
+    모델이 ‘7/1(일)’ 처럼 요일을 틀리게 적으면 표기만 봐서는 요일 조건이 통과해 버린다.
+    """
+    if year and month:
+        try:
+            wd = datetime.date(year, month, _day(m.date_label)).weekday()   # 월=0
+            return WEEKDAYS[(wd + 1) % 7]
+        except ValueError:
+            pass
+    return _wday(m.date_label)
 
 
 def default_conditions() -> list[dict]:
@@ -221,48 +259,59 @@ def parse_text(sentence: str) -> list[dict]:
 def conditions_prompt(conds: list[dict]) -> str:
     if not conds:
         return ""
-    lines = "\n".join(f"- {to_text(c)}" for c in conds)
-    return "[반드시 지켜야 할 추가 조건(어기면 실패로 간주)]\n" + lines
+    lines = "\n".join(f"{i}. {to_text(c)}" for i, c in enumerate(conds, start=1))
+    return ("[반드시 지켜야 할 추가 조건 — 어기면 실패로 간주]\n"
+            "아래 조건은 기본 규칙·참고 예시·과거 식단 기록과 어긋나더라도 항상 우선합니다.\n"
+            "메뉴 이름은 메인·반찬·국 어느 자리에 쓰였든 똑같이 셉니다.\n"
+            "출력하기 전에 조건을 하나씩 다시 대조해 보고, 어긋난 날이 있으면 고친 뒤 출력하세요.\n"
+            + lines)
 
 
-def validate(meals, conds: list[dict]) -> list[str]:
-    """조건 위반 목록(빈 리스트=통과). meals: MealLine 리스트."""
+def validate(meals, conds: list[dict], year: int | None = None,
+             month: int | None = None) -> list[str]:
+    """조건 위반 목록(빈 리스트=통과). meals: MealLine 리스트.
+
+    메뉴는 메인뿐 아니라 반찬·국 자리까지 전부 본다 — 조건은 ‘계란찜 월 3회 이하’처럼
+    반찬·국에도 걸 수 있는데, 메인만 세면 그런 조건은 어겨도 늘 통과해 버린다.
+    year/month 를 주면 요일 조건을 실제 달력으로 따진다.
+    위반 메시지에는 어긴 날짜를 적는다(재생성 때 모델이 고칠 곳을 알 수 있게).
+    """
     errors: list[str] = []
     for c in conds:
         t = c.get("type")
         if t == "menu_count":
-            cnt = sum(1 for m in meals if c["menu"] in m.main)
-            n, op = c["count"], c["op"]
+            hit = _hits(c["menu"], meals)
+            cnt, n, op = len(hit), c["count"], c["op"]
             ok = (op == "<=" and cnt <= n) or (op == "==" and cnt == n) or \
                  (op == ">=" and cnt >= n)
             if not ok:
-                errors.append(f"{to_text(c)} (현재 {cnt}회)")
+                at = f": {_where(hit, 6)}" if hit else ""
+                errors.append(f"{to_text(c)} (현재 {cnt}회{at})")
         elif t == "menu_section":
-            bad = [m for m in meals if c["menu"] in m.main and m.section != c["section"]]
+            bad = [m for m in _hits(c["menu"], meals) if m.section != c["section"]]
             if bad:
-                errors.append(f"{to_text(c)} (위반 {len(bad)}건)")
+                errors.append(f"{to_text(c)} (위반 {len(bad)}건: {_where(bad)})")
         elif t == "menu_weekday":
             allow = set(c.get("weekdays") or [])
             if not allow:
                 continue          # 요일을 하나도 안 고른 조건은 검사하지 않음
-            # 메인뿐 아니라 반찬·국 자리에 끼어든 경우도 위반으로 본다
             bad = [m for m in meals
                    if any(name_matches(c["menu"], it) for it in m.items)
-                   and _wday(m.date_label) not in allow]
+                   and _real_wday(m, year, month) not in allow]
             if bad:
-                days = ", ".join(m.date_label for m in bad[:3])
-                errors.append(f"{to_text(c)} (위반 {len(bad)}건: {days})")
+                errors.append(f"{to_text(c)} (위반 {len(bad)}건: {_where(bad)})")
         elif t == "menu_gap":
-            days = sorted(_day(m.date_label) for m in meals if c["menu"] in m.main)
-            for a, b in zip(days, days[1:]):
-                if b - a < c["days"]:
-                    errors.append(f"{to_text(c)} (간격 {b - a}일)")
+            hit = sorted(_hits(c["menu"], meals), key=lambda m: _day(m.date_label))
+            for a, b in zip(hit, hit[1:]):
+                gap = _day(b.date_label) - _day(a.date_label)
+                if gap < c["days"]:
+                    errors.append(f"{to_text(c)} (간격 {gap}일: {_where([a, b])})")
                     break
         elif t == "category_max":
             kws = CATEGORIES.get(c["category"], ())
-            cnt = sum(1 for m in meals if any(k in m.main for k in kws))
-            if cnt > c["max"]:
-                errors.append(f"{to_text(c)} (현재 {cnt}회)")
+            hit = [m for m in meals if any(k in it for it in m.items for k in kws)]
+            if len(hit) > c["max"]:
+                errors.append(f"{to_text(c)} (현재 {len(hit)}회: {_where(hit, 8)})")
     return errors
 
 
