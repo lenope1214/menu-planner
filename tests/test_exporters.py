@@ -105,14 +105,15 @@ def test_회전번호는_2026년_12월_1일이_1이고_사흘마다_돈다():
     assert layouts.cycle_number(2026, 11, 30) == 3      # 기준일 앞으로도 이어진다
     assert layouts.cycle_number(2027, 1, 1) == 2        # 달·해가 바뀌어도 끊기지 않는다
     assert layouts.day_with_cycle(2026, 12, 4) == "4 (1)"
+    assert layouts.date_with_cycle(2026, 12, 4) == "12/4 (1)"
 
 
 def test_엑셀_날짜칸에_회전번호가_붙는다(tmp_path):
     for preset in (PRESET_CALENDAR, PRESET_KITCHEN):
         _wb, ws = _sheet(tmp_path, preset)
-        want = layouts.day_with_cycle(2026, 7, 1)
+        n = layouts.cycle_number(2026, 7, 1)
         values = {c.value for row in ws.iter_rows() for c in row}
-        assert want in values, preset
+        assert f"7/1 ({n})" in values, preset            # 월/일 (번호)
         assert 1 not in values, preset                   # 숫자만 든 날짜칸은 남지 않는다
 
 

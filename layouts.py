@@ -53,8 +53,13 @@ def cycle_number(year: int, month: int, day: int) -> int:
 
 
 def day_with_cycle(year: int, month: int, day: int) -> str:
-    """날짜(일) 옆에 회전 번호를 붙인 표기. 예: '1 (1)'."""
+    """날짜(일) 옆에 회전 번호를 붙인 표기. 예: '1 (1)'. (GUI 달력 미리보기용)"""
     return f"{day} ({cycle_number(year, month, day)})"
+
+
+def date_with_cycle(year: int, month: int, day: int) -> str:
+    """월/일 옆에 회전 번호를 붙인 표기. 예: '12/1 (1)'. (엑셀 날짜칸용)"""
+    return f"{month}/{day} ({cycle_number(year, month, day)})"
 
 _DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})\(([월화수목금토일])\)")
 

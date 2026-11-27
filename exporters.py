@@ -226,7 +226,7 @@ def _delivery_section(ws, md, section, weeks, r):
     # 주별: 날짜행 + 메뉴행
     for week in weeks:
         for ci, day in enumerate(week, start=1):
-            _set(ws, r, ci, (layouts.day_with_cycle(md.year, md.month, day) if day else None),
+            _set(ws, r, ci, (layouts.date_with_cycle(md.year, md.month, day) if day else None),
                  font=FONT_BODY, size=29, bold=True,
                  fill=(GRAY if day else TEAL), valign="center")
         ws.row_dimensions[r].height = DLV_ROW_H_HEAD
@@ -271,7 +271,7 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
             _set(ws, r, ci + 2, wd, font=FONT_HEAD, size=24, bold=True, color=None,
                  fill=BLUE, valign=None)
             _set(ws, r + 1, ci + 2,
-                 (layouts.day_with_cycle(md.year, md.month, week[ci]) if week[ci] else None),
+                 (layouts.date_with_cycle(md.year, md.month, week[ci]) if week[ci] else None),
                  font=FONT_BODY, size=24,
                  bold=True, fill=BLUE, valign="top")
         ws.row_dimensions[r].height = KIT_ROW_H_HEAD

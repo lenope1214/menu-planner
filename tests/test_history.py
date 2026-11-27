@@ -185,3 +185,12 @@ def test_요약_문구():
     assert history.summary() == "아직 기록이 없어요."
     history.save_month(_june())
     assert history.summary() == "2026.06 · 1개월 2일 기록됨"
+
+
+def test_날짜칸은_월일_형식도_일로_읽는다():
+    """엑셀 날짜칸이 '12/1 (1)' 이라 앞의 12(월)를 날짜로 읽으면 안 된다."""
+    assert history._cell_day("12/1 (1)") == 1
+    assert history._cell_day("12/31 (1)") == 31
+    assert history._cell_day("4 (1)") == 4
+    assert history._cell_day(7) == 7
+    assert history._cell_day("일요일") is None

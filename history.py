@@ -335,13 +335,13 @@ def _ym_from_sheet(title: str) -> tuple[int, int] | None:
 
 
 def _cell_day(v) -> int | None:
-    """날짜 칸 값 → 1~31 일(day). 숫자이거나 '1 (1)'처럼 앞이 숫자인 문자열을 받는다."""
+    """날짜 칸 값 → 1~31 일(day). 숫자, '1 (1)', '12/1 (1)'(월/일) 형식을 받는다."""
     if isinstance(v, bool):
         return None
     if isinstance(v, (int, float)) and float(v).is_integer():
         n = int(v)
     elif isinstance(v, str):
-        m = re.match(r"\s*(\d{1,2})", v)
+        m = re.match(r"\s*(?:\d{1,2}/)?(\d{1,2})(?!\d)", v)
         n = int(m.group(1)) if m else None
     else:
         n = None
