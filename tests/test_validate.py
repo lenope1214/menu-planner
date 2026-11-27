@@ -200,3 +200,68 @@ def test_끝내_못_맞추면_위반이_가장_적은_결과를_돌려준다(mon
 
     monkeypatch.setattr(mp, "generate_menu", lambda y, m, **kw: good)
     assert mp.generate_validated_menu(2026, 7, api_key="x") == (good, [])
+
+
+# ---- 프로그램이 직접 고치기(repair_menu) ----
+
+def _pool():
+    from menu_data import default_pool
+    return default_pool()
+
+
+def test_일시정지_메뉴와_끼니_위반을_직접_바꿔_넣는다():
+    """모델이 네 번을 고쳐도 못 맞추던 실제 사례: 수육이 석식에, 일시정지 반찬이 여러 번."""
+    pool = _pool()
+    conds = [{"type": "menu_section", "menu": "수육", "section": "중식"}]
+    t = text(lunch=[line("7/1(수)", "제육볶음", sides=["꼬시래기무침", "감자조림", "오이무침"]),
+                    line("7/2(목)", "불고기", sides=["꼬시래기무침", "감자조림", "오이무침"])],
+             dinner=[line("7/1(수)", "수육"), line("7/2(목)", "돈까스")])
+    kw = dict(conditions=conds)
+    assert len(mp.validate_menu(t, pool=pool, paused=["꼬시래기무침"], **kw)) == 2
+    fixed, errs = mp.repair_menu(t, pool=pool, paused=["꼬시래기무침"], **kw)
+    assert errs == []
+    assert "꼬시래기무침" not in fixed
+    meals = mp.parse_menu_text(fixed)
+    assert all(m.main != "수육" for m in meals if m.section == "석식")
+    # 문제없던 칸은 그대로 둔다
+    assert meals[0].main == "제육볶음" and meals[0].items[2:] == ["감자조림", "오이무침", "김치류", "콩나물국"]
+    assert meals[3].items == mp.parse_menu_text(t)[3].items
+
+
+def test_고치다가_다른_규칙을_새로_어기지_않는다():
+    """석식 수육을 바꿀 때, 앞뒤 날짜와 4일 간격이 겹치는 메인은 고르지 않는다."""
+    pool = _pool()
+    conds = [{"type": "menu_section", "menu": "수육", "section": "중식"}]
+    t = text(dinner=[line("7/1(수)", "불고기"), line("7/2(목)", "수육"), line("7/3(금)", "돈까스")])
+    fixed, errs = mp.repair_menu(t, pool=pool, conditions=conds)
+    assert errs == []
+    mains = [m.main for m in mp.parse_menu_text(fixed)]
+    assert mains[0] == "불고기" and mains[2] == "돈까스" and len(set(mains)) == 3
+
+
+def test_모자란_횟수는_채워_넣는다():
+    pool = _pool()
+    conds = [{"type": "menu_count", "menu": "후라이드치킨", "op": "==", "count": 2},
+             {"type": "menu_section", "menu": "후라이드치킨", "section": "중식"}]
+    t = _full_month()
+    fixed, errs = mp.repair_menu(t, pool=pool, conditions=conds, year=2026, month=7)
+    assert errs == []
+    hits = [m for m in mp.parse_menu_text(fixed) if m.main == "후라이드치킨"]
+    assert len(hits) == 2 and all(m.section == "중식" for m in hits)
+
+
+def test_바꿔치기로_못_푸는_위반은_그대로_알린다():
+    t = _full_month(skip={31})
+    fixed, errs = mp.repair_menu(t, pool=_pool(), year=2026, month=7)
+    assert fixed == t and len(errs) == 2                      # 빠진 날짜는 지어내지 않는다
+
+
+def test_모델이_못_맞춘_위반을_고쳐서_돌려준다(monkeypatch):
+    """생성 경로 전체: 모델이 계속 일시정지 메뉴를 써도 결과에는 남지 않는다."""
+    bad = _full_month().replace("어묵볶음", "꼬시래기무침")
+    calls = []
+    monkeypatch.setattr(mp, "generate_menu", lambda y, m, **kw: calls.append(1) or bad)
+    out, errs = mp.generate_validated_menu(2026, 7, api_key="x", pool=_pool(),
+                                           paused=["꼬시래기무침"])
+    assert errs == [] and "꼬시래기무침" not in out
+    assert len(calls) == 1                                    # 다시 부탁할 필요 없이 한 번에 끝난다

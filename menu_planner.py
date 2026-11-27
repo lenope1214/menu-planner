@@ -506,6 +506,7 @@ def generate_validated_menu(
     조건이 새지 않게 하는 장치:
     - 재시도는 '처음부터 새로'가 아니라 지금까지 가장 나은 결과를 주고 위반만 고치게 한다.
     - 재시도마다 temperature 를 낮춰 지시를 더 그대로 따르게 한다.
+    - 모델이 못 맞춘 칸은 repair_menu 가 풀의 다른 메뉴로 직접 바꿔 넣는다.
     - 끝내 다 못 맞추면 마지막 결과가 아니라 위반이 가장 적었던 결과를 돌려준다.
     """
     best_text, best_errors = "", None
@@ -522,11 +523,17 @@ def generate_validated_menu(
             conditions=conditions, pool_only=pool_only, examples=examples,
             paused=paused, history_block=history_block, progress=progress,
         )
-        errors = validate_menu(text, conditions=conditions, pool=pool,
-                               pool_only=pool_only, paused=paused,
-                               history_recent=history_recent,
-                               history_names=history_names,
-                               year=year, month=month, closed_days=closed_days)
+        vkw = dict(conditions=conditions, pool_only=pool_only,
+                   history_recent=history_recent, history_names=history_names,
+                   year=year, month=month, closed_days=closed_days)
+        errors = validate_menu(text, pool=pool, paused=paused, **vkw)
+        if errors:
+            # 모델이 못 맞춘 칸은 프로그램이 풀의 다른 메뉴로 직접 바꿔 넣는다
+            if progress:
+                progress(f"조건에 어긋난 {len(errors)}건을 프로그램이 직접 고치는 중...")
+            fixed_text, fixed_errors = repair_menu(text, pool=pool, paused=paused, **vkw)
+            if len(fixed_errors) < len(errors):
+                text, errors = fixed_text, fixed_errors
         if best_errors is None or len(errors) < len(best_errors):
             best_text, best_errors = text, errors
         if not best_errors:
@@ -598,7 +605,8 @@ def validate_menu(text: str, conditions: list | None = None,
                   history_recent: list | None = None,
                   history_names: set[str] | None = None,
                   year: int | None = None, month: int | None = None,
-                  closed_days: set[int] | None = None) -> list[str]:
+                  closed_days: set[int] | None = None,
+                  culprits: list | None = None) -> list[str]:
     """규칙(형식) + 사용자 조건 + ‘추가 메뉴만’ + 일시정지 + 과거 기록 위반 목록.
 
     history_recent: history.recent_tail() 결과 [(상대일, 끼니, 메인, 날짜표기)].
@@ -606,8 +614,14 @@ def validate_menu(text: str, conditions: list | None = None,
     history_names: 과거에 실제로 쓴 메뉴 이름 집합('과거 메뉴만' 모드일 때만).
     year/month(+closed_days): 주면 달력과 대조한다 — 빠진 날짜·중복·틀린 요일 표기.
         (출력이 중간에 끊기거나 요일을 틀리게 적으면 다른 검사가 전부 통과해 버린다.)
+    culprits: 리스트를 주면 ‘다른 메뉴로 바꾸면 풀리는 칸’을 (끼니, 날짜표기, 메뉴) 로
+        채워 준다(repair_menu 용). 형식 오류·빠진 날짜처럼 바꿔치기로 못 푸는 위반은 안 넣는다.
     빈 리스트 = 통과.
     """
+    def blame(m, item):
+        if culprits is not None:
+            culprits.append((m.section, m.date_label, item))
+
     errors: list[str] = []
     meals = parse_menu_text(text)
     if not meals:
@@ -661,11 +675,13 @@ def validate_menu(text: str, conditions: list | None = None,
                 errors.append(
                     f"[{section}] 메인 '{m.main}' 4일 이내 재등장 ({seen[m.main]}일→{di}일)"
                 )
+                blame(m, m.main)
             seen[m.main] = di
 
     # (3) 사용자 조건
     if conditions:
-        errors.extend(cond_mod.validate(meals, conditions, year=year, month=month))
+        errors.extend(cond_mod.validate(meals, conditions, year=year, month=month,
+                                        culprits=culprits))
 
     # (4) ‘추가된 메뉴만 사용’(메인 기준)
     if pool_only and pool is not None:
@@ -674,6 +690,7 @@ def validate_menu(text: str, conditions: list | None = None,
             main = m.main
             if main and not any(main == n or n in main or main in n for n in names):
                 errors.append(f"[{m.section} {m.date_label}] 풀에 없는 메인 '{main}'")
+                blame(m, main)
 
     # (5) 일시정지 메뉴(메인뿐 아니라 반찬/국 자리까지 전부 검사)
     if paused:
@@ -683,6 +700,7 @@ def validate_menu(text: str, conditions: list | None = None,
                 for p in paused:
                     if cond_mod.name_matches(p, item):
                         hits.setdefault(p, []).append(f"{m.section} {m.date_label}")
+                        blame(m, item)
                         break
         for p, where in hits.items():
             errors.append(
@@ -710,6 +728,7 @@ def validate_menu(text: str, conditions: list | None = None,
                             f"{m.date_label}에 또 나옵니다(4일 이내). 다른 메인으로 바꾸세요."
                         )
                         flagged.add(m.main)
+                        blame(m, m.main)
                         break
 
     # (7) ‘과거에 냈던 메뉴만 사용’ — 기록에 없는 이름은 전부 모아 한 번에 알린다
@@ -721,6 +740,7 @@ def validate_menu(text: str, conditions: list | None = None,
                     continue
                 if not any(cond_mod.name_matches(n, item) for n in history_names):
                     unknown.add(item)
+                    blame(m, item)
         if unknown:
             names = ", ".join(sorted(unknown)[:12])
             more = f" 외 {len(unknown) - 12}개" if len(unknown) > 12 else ""
@@ -730,6 +750,145 @@ def validate_menu(text: str, conditions: list | None = None,
             )
 
     return errors
+
+
+# ----------------------------------------------------------------------------
+# 4-2. 코드로 직접 고치기 (모델이 끝내 못 맞춘 위반의 마지막 방어선)
+# ----------------------------------------------------------------------------
+# 모델에게 "이 메뉴는 쓰지 마라"를 여러 번 말해도 계속 쓰는 경우가 있다(과거 기록·예시에
+# 자주 나온 메뉴일수록 그렇다). 그런 위반은 다시 부탁하는 것보다 그 칸만 풀의 다른 메뉴로
+# 바꿔 넣는 편이 확실하다. validate_menu 가 알려주는 ‘바꿔야 할 칸’을 하나씩 바꿔 보고,
+# 위반이 실제로 줄어드는 교체만 받아들인다(새 위반을 만드는 교체는 버린다).
+
+REPAIR_MAX_STEPS = 120     # 교체 횟수 상한(무한 반복 방지)
+
+
+def _render_meals(meals: list[MealLine]) -> str:
+    """MealLine 목록 -> 표준 식단표 텍스트(끼니 구역은 처음 나온 순서대로)."""
+    order: list[str] = []
+    for m in meals:
+        if m.section not in order:
+            order.append(m.section)
+    lines: list[str] = []
+    for sec in order:
+        lines.append(f"[{sec}]")
+        lines.extend(f"{m.date_label}: " + ", ".join(m.items) for m in meals if m.section == sec)
+    return "\n".join(lines)
+
+
+def _slot_kind(meal: MealLine, idx: int) -> str | None:
+    """그 칸이 메인/반찬/국 중 무엇인지. 김치류나 형식이 깨진 줄은 None(건드리지 않는다)."""
+    if len(meal.items) != MENU_COUNT_PER_MEAL or meal.items[idx] == KIMCHI_LABEL:
+        return None
+    if idx == 0:
+        return "mains"
+    if idx == len(meal.items) - 1:
+        return "soups"
+    return "sides"
+
+
+def repair_menu(text: str, pool: MenuPool | None = None,
+                paused: list[str] | None = None, **validate_kwargs) -> tuple[str, list[str]]:
+    """위반한 칸을 풀의 다른 메뉴로 직접 바꿔 넣는다. 반환: (고친 텍스트, 남은 위반).
+
+    validate_kwargs 는 validate_menu 에 그대로 넘긴다(conditions, year, month, …).
+    바꿔치기로 풀 수 없는 위반(메뉴 6개 아님, 빠진 날짜 등)은 그대로 남는다.
+    """
+    pool = pool or default_pool()
+    paused = list(paused or [])
+    meals = parse_menu_text(text)
+    if not meals:
+        return text, validate_menu(text, pool=pool, paused=paused, **validate_kwargs)
+
+    names = {
+        "mains": [d.name for d in pool.mains],
+        "sides": list(pool.sides),
+        "soups": list(pool.soups),
+    }
+    scope = {d.name: d.meal_scope for d in pool.mains}
+
+    def check():
+        cul: list = []
+        errs = validate_menu(_render_meals(meals), pool=pool, paused=paused,
+                             culprits=cul, **validate_kwargs)
+        return (len(errs), len(cul)), errs, cul
+
+    def candidates(kind: str, meal: MealLine) -> list[str]:
+        used: dict[str, int] = {}
+        for m in meals:
+            for it in m.items:
+                used[it] = used.get(it, 0) + 1
+        out = []
+        for n in names[kind]:
+            if n in meal.items or any(cond_mod.name_matches(p, n) for p in paused):
+                continue
+            if kind == "mains" and scope.get(n, "both") not in (
+                    "both", "lunch" if meal.section == "중식" else "dinner"):
+                continue
+            out.append(n)
+        return sorted(out, key=lambda n: used.get(n, 0))     # 덜 나온 메뉴부터(다양성 유지)
+
+    def try_slot(meal: MealLine, idx: int, options: list[str], cur):
+        """그 칸에 options 를 넣어 보고, 점수가 가장 좋아지는 것을 적용한다."""
+        old, best = meal.items[idx], None
+        for cand in options:
+            meal.items[idx] = cand
+            if idx == 0:
+                meal.main = cand
+            sc, _, _ = check()
+            if sc < cur and (best is None or sc < best[0]):
+                best = (sc, cand)
+        meal.items[idx] = best[1] if best else old
+        if idx == 0:
+            meal.main = meal.items[0]
+        return best is not None
+
+    score, errors, culprits = check()
+    for _ in range(REPAIR_MAX_STEPS):
+        if not errors or not culprits:
+            break
+        fixed = False
+        for sec, label, item in culprits:
+            if sec:   # 바꿔야 할 칸
+                meal = next((m for m in meals if m.section == sec and m.date_label == label
+                             and item in m.items), None)
+                if meal is None:
+                    continue
+                idx = meal.items.index(item)
+                kind = _slot_kind(meal, idx)
+                if kind and try_slot(meal, idx, candidates(kind, meal), score):
+                    fixed = True
+            else:     # 모자란 메뉴: 어울리는 자리(메인/반찬/국) 어딘가에 넣어 본다
+                kind = next((k for k in ("mains", "sides", "soups")
+                             if any(cond_mod.name_matches(item, n) for n in names[k])), "mains")
+                menu = next((n for n in names[kind] if cond_mod.name_matches(item, n)), item)
+                best = None
+                for meal in meals:
+                    idxs = [i for i in range(len(meal.items)) if _slot_kind(meal, i) == kind]
+                    if not idxs or menu in meal.items:
+                        continue
+                    idx, old = idxs[0], meal.items[idxs[0]]
+                    meal.items[idx] = menu
+                    if idx == 0:
+                        meal.main = menu
+                    sc, _, _ = check()
+                    if sc < score and (best is None or sc < best[0]):
+                        best = (sc, meal, idx)
+                    meal.items[idx] = old
+                    if idx == 0:
+                        meal.main = old
+                if best:
+                    _, meal, idx = best
+                    meal.items[idx] = menu
+                    if idx == 0:
+                        meal.main = menu
+                    fixed = True
+            if fixed:
+                break
+        if not fixed:
+            break
+        score, errors, culprits = check()
+    return _render_meals(meals), errors
 
 
 # ----------------------------------------------------------------------------

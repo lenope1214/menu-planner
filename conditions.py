@@ -268,15 +268,29 @@ def conditions_prompt(conds: list[dict]) -> str:
 
 
 def validate(meals, conds: list[dict], year: int | None = None,
-             month: int | None = None) -> list[str]:
+             month: int | None = None, culprits: list | None = None) -> list[str]:
     """조건 위반 목록(빈 리스트=통과). meals: MealLine 리스트.
 
     메뉴는 메인뿐 아니라 반찬·국 자리까지 전부 본다 — 조건은 ‘계란찜 월 3회 이하’처럼
     반찬·국에도 걸 수 있는데, 메인만 세면 그런 조건은 어겨도 늘 통과해 버린다.
     year/month 를 주면 요일 조건을 실제 달력으로 따진다.
     위반 메시지에는 어긴 날짜를 적는다(재생성 때 모델이 고칠 곳을 알 수 있게).
+
+    culprits: 리스트를 주면 ‘바꿔야 할 칸’을 (끼니, 날짜표기, 칸의 메뉴) 로 채워 준다.
+        모자라서 생긴 위반(‘월 2회 이상’인데 1회)은 ("", "", 메뉴이름) 으로 넣는다.
+        menu_planner.repair_menu 가 이 목록을 보고 직접 메뉴를 바꾼다.
     """
     errors: list[str] = []
+
+    def blame(ms, match):
+        if culprits is None:
+            return
+        for m in ms:
+            for it in m.items:
+                if match(it):
+                    culprits.append((m.section, m.date_label, it))
+                    break
+
     for c in conds:
         t = c.get("type")
         if t == "menu_count":
@@ -287,10 +301,15 @@ def validate(meals, conds: list[dict], year: int | None = None,
             if not ok:
                 at = f": {_where(hit, 6)}" if hit else ""
                 errors.append(f"{to_text(c)} (현재 {cnt}회{at})")
+                if cnt > n:                      # 넘친 만큼(뒤쪽부터) 바꿀 칸으로
+                    blame(hit[n:], lambda it, c=c: item_has(c["menu"], it))
+                elif culprits is not None:       # 모자란 만큼은 ‘넣어야 할 메뉴’로
+                    culprits.extend([("", "", c["menu"])] * (n - cnt))
         elif t == "menu_section":
             bad = [m for m in _hits(c["menu"], meals) if m.section != c["section"]]
             if bad:
                 errors.append(f"{to_text(c)} (위반 {len(bad)}건: {_where(bad)})")
+                blame(bad, lambda it, c=c: item_has(c["menu"], it))
         elif t == "menu_weekday":
             allow = set(c.get("weekdays") or [])
             if not allow:
@@ -300,18 +319,21 @@ def validate(meals, conds: list[dict], year: int | None = None,
                    and _real_wday(m, year, month) not in allow]
             if bad:
                 errors.append(f"{to_text(c)} (위반 {len(bad)}건: {_where(bad)})")
+                blame(bad, lambda it, c=c: name_matches(c["menu"], it))
         elif t == "menu_gap":
             hit = sorted(_hits(c["menu"], meals), key=lambda m: _day(m.date_label))
             for a, b in zip(hit, hit[1:]):
                 gap = _day(b.date_label) - _day(a.date_label)
                 if gap < c["days"]:
                     errors.append(f"{to_text(c)} (간격 {gap}일: {_where([a, b])})")
+                    blame([b], lambda it, c=c: item_has(c["menu"], it))
                     break
         elif t == "category_max":
             kws = CATEGORIES.get(c["category"], ())
             hit = [m for m in meals if any(k in it for it in m.items for k in kws)]
             if len(hit) > c["max"]:
                 errors.append(f"{to_text(c)} (현재 {len(hit)}회: {_where(hit, 8)})")
+                blame(hit[c["max"]:], lambda it, kws=kws: any(k in it for k in kws))
     return errors
 
 
