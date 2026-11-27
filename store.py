@@ -233,6 +233,28 @@ def save_examples(examples: list[dict]) -> None:
     _save(EXAMPLES_FILE, examples)
 
 
+# ---- 마지막으로 만든 식단표(last_menu.json) ----
+# 프로그램을 껐다 켜도 직전 식단표가 그대로 보이게 한다. 화면에서 고친 내용까지 담는다.
+# 이 PC 에서 작업 중인 초안이라 DATA_FILES(GitHub 동기화)에는 넣지 않는다.
+LAST_MENU_FILE = "last_menu.json"
+
+
+def get_last_menu() -> dict | None:
+    """{"year": int, "month": int, "text": 표준 식단표 텍스트} 또는 None."""
+    d = _load(LAST_MENU_FILE, None)
+    try:
+        if d and d.get("text") and 1 <= int(d["month"]) <= 12 and int(d["year"]) > 2000:
+            return {"year": int(d["year"]), "month": int(d["month"]), "text": str(d["text"])}
+    except (AttributeError, KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
+def save_last_menu(year: int, month: int, text: str) -> None:
+    if text and text.strip():
+        _save(LAST_MENU_FILE, {"year": int(year), "month": int(month), "text": text})
+
+
 # ---- 공유 설정(settings.json): 추가된 메뉴만 사용(pool_only) 등, 다른 PC와 함께 쓰는 값 ----
 
 def get_settings() -> dict:

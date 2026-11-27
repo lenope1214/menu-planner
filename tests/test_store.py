@@ -119,3 +119,23 @@ def test_기록에_있는_메뉴를_풀에_채운다():
     assert mains["고등어구이"]["is_fish"] is True      # 이름으로 생선류 자동 판정
     assert "미역국" in pool["soups"]
     assert store.add_missing_from_history() == {"mains": 0, "sides": 0, "soups": 0}
+
+
+# ---- 마지막으로 만든 식단표 ----
+
+def test_마지막_식단표를_기억했다가_돌려준다():
+    assert store.get_last_menu() is None                       # 처음엔 없다
+    store.save_last_menu(2026, 12, "[중식]\n12/1(화): 제육볶음, 가, 나, 다, 김치류, 무국")
+    last = store.get_last_menu()
+    assert (last["year"], last["month"]) == (2026, 12) and "제육볶음" in last["text"]
+
+
+def test_빈_식단표는_저장하지_않고_깨진_파일은_무시한다(isolated_config):
+    store.save_last_menu(2026, 12, "   ")
+    assert store.get_last_menu() is None
+    (isolated_config / store.LAST_MENU_FILE).write_text('{"year": "x"}', encoding="utf-8")
+    assert store.get_last_menu() is None
+
+
+def test_마지막_식단표는_동기화_대상이_아니다():
+    assert store.LAST_MENU_FILE not in store.DATA_FILES        # 이 PC 의 작업 초안

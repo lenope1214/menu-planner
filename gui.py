@@ -77,11 +77,44 @@ class MenuPlannerApp:
 
         self._build_fonts()
         self._build_layout()
+        self._restore_last_menu()      # 지난번에 만든 식단표가 있으면 그대로 다시 띄운다
         self._render_preview()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._check_key_on_start()
         # 키가 있으면 시작 시 실제 사용 가능한 모델 목록을 백그라운드로 불러온다
         if app_config.get_api_key():
             self._refresh_models()
+
+    # --- 마지막 식단표 기억/복원 ---
+    def _restore_last_menu(self):
+        last = store.get_last_menu()
+        if not last:
+            return
+        md = layouts.build_month_data(last["text"], last["year"], last["month"])
+        if md.is_empty():
+            return
+        self.month_data = md
+        self.cur_year, self.cur_month = last["year"], last["month"]
+        self.var_year.set(str(last["year"]))
+        self.var_month.set(str(last["month"]))
+        self.var_status.set(f"지난번에 만든 {last['year']}년 {last['month']}월 식단표를 불러왔어요.\n"
+                            "새로 만들려면 ‘식단표 만들기’를 눌러 주세요.")
+
+    def _remember(self):
+        """지금 표(화면에서 고친 내용 포함)를 저장해 둔다 — 다음에 켜도 그대로 보이게."""
+        if not self.month_data or self.month_data.is_empty():
+            return
+        try:
+            store.save_last_menu(self.cur_year, self.cur_month,
+                                 layouts.month_data_to_text(self.month_data))
+        except Exception:
+            pass   # 저장 실패가 화면 작업을 막아선 안 된다
+
+    def _on_close(self):
+        if not self._busy:
+            self._flush_cells()
+            self._remember()
+        self.root.destroy()
 
     # --- 폰트 ---
     def _build_fonts(self):
@@ -381,6 +414,7 @@ class MenuPlannerApp:
     # --- 미리보기 렌더링 ---
     def _on_preset_change(self):
         self._flush_cells()
+        self._remember()
         self._render_preview()
 
     def _render_preview(self):
@@ -409,6 +443,14 @@ class MenuPlannerApp:
                       relief="solid", bd=1)
         e.insert(0, value)
         self._cells.append((e, day, section, idx))
+
+        def keep(_=None, e=e, day=day, section=section, idx=idx):
+            # 칸을 벗어날 때마다 고친 내용을 저장(프로그램이 갑자기 꺼져도 남도록)
+            if self.month_data and self.month_data.get(day, section)[idx] != e.get().strip():
+                self.month_data.set_item(day, section, idx, e.get().strip())
+                self._remember()
+
+        e.bind("<FocusOut>", keep)
         return e
 
     # 달력형(중식/석식 분리)
@@ -504,6 +546,7 @@ class MenuPlannerApp:
         self._flush_cells()
         if not self.month_data:
             return ""
+        self._remember()
         kitchen = self.var_preset.get() == layouts.PRESET_KITCHEN
         return layouts.month_data_to_text(self.month_data, with_cycle=with_cycle and kitchen)
 
@@ -594,6 +637,7 @@ class MenuPlannerApp:
 
     def _on_done(self, text: str, errors: list[str]):
         self.month_data = layouts.build_month_data(text, self.cur_year, self.cur_month)
+        self._remember()
         self._render_preview()
         self._set_busy(False)
         if errors:

@@ -12,6 +12,7 @@ conditions.json
 examples.json
 settings.json
 history.json
+last_menu.json
 
 # Python
 __pycache__/

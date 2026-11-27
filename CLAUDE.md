@@ -173,6 +173,14 @@ pytest tests/test_exporters.py -v
 - 표준 텍스트(검증·엑셀 저장·프롬프트용)에는 붙이지 않는다. `LINE_RE` 와
   `history._cell_day()` 는 번호가 붙은 형식도 읽으므로 내보낸 파일을 다시 가져와도 된다.
 
+## 마지막 식단표 기억 (last_menu.json)
+
+- 만든 식단표는 `store.save_last_menu()` 로 `last_menu.json` 에 남고, 프로그램을 켜면
+  `gui._restore_last_menu()` 가 그 연/월·내용을 그대로 다시 띄운다(API 호출 없음).
+- 저장 시점(`gui._remember`): 생성 직후 / 칸을 고치고 벗어날 때 / 보기 형식 전환 /
+  저장·복사·인쇄 / 창을 닫을 때. 화면에서 고친 내용까지 남는다.
+- 이 PC 의 작업 초안이라 `DATA_FILES`(GitHub 동기화)에는 넣지 않는다. `.gitignore` 대상.
+
 ## 주의
 
 - 규칙은 프롬프트(`SYSTEM_INSTRUCTION`)와 코드(`validate_menu`) 양쪽에 있음 — 한쪽만 고치지 말 것
