@@ -120,19 +120,27 @@ def save_txt(text: str, path: str) -> None:
 # 엑셀 저장 (.xlsx)
 # ----------------------------------------------------------------------------
 
+# save_xlsx 의 preset 에 이 값을 주면 한 파일에 배달 탭 + 주방 탭을 함께 넣는다.
+PRESET_BOTH = "배달+주방"
+
+
 def save_xlsx(text: str, path: str, title: str = "식단표",
               preset: str = layouts.PRESET_CALENDAR,
               year: int | None = None, month: int | None = None) -> None:
+    """식단표 텍스트를 엑셀로 저장한다.
+
+    preset: 달력형(배달 탭만) / 주방형(주방 탭만) / PRESET_BOTH(두 탭을 한 파일에, 배달이 앞).
+    """
     from openpyxl import Workbook
 
     year, month = _infer_year_month(text, year, month)
     md = build_month_data(text, year, month)
     wb = Workbook()
     wb.remove(wb.active)
-    if preset == PRESET_KITCHEN:
-        _xlsx_kitchen(wb, md)
-    else:
+    if preset != PRESET_KITCHEN:
         _xlsx_delivery(wb, md)
+    if preset in (PRESET_KITCHEN, PRESET_BOTH):
+        _xlsx_kitchen(wb, md)
     wb.save(path)
 
 

@@ -182,3 +182,23 @@ def test_텍스트로도_저장된다(tmp_path):
     p = tmp_path / "t.txt"
     ex.save_txt(SAMPLE, str(p))
     assert p.read_text(encoding="utf-8") == SAMPLE
+
+
+# ---- 한 파일에 배달 + 주방 ----
+
+def test_한_번_저장에_배달과_주방_탭이_함께_들어간다(tmp_path):
+    p = tmp_path / "both.xlsx"
+    ex.save_xlsx(SAMPLE, str(p), preset=ex.PRESET_BOTH, year=2026, month=7)
+    wb = load_workbook(str(p))
+    assert wb.sheetnames == ["배달-26.07", "주방-26.07"]         # 배달이 앞
+    dlv, kit = wb.worksheets
+
+    # 각 탭은 따로 저장했을 때와 똑같다
+    for ws, preset in ((dlv, PRESET_CALENDAR), (kit, PRESET_KITCHEN)):
+        _wb, alone = _sheet(tmp_path, preset)
+        assert ws.dimensions == alone.dimensions
+        assert ws.page_setup.orientation == alone.page_setup.orientation
+        for row_a, row_b in zip(ws.iter_rows(), alone.iter_rows()):
+            assert [c.value for c in row_a] == [c.value for c in row_b]
+        for r in range(1, ws.max_row + 1):
+            assert ws.row_dimensions[r].height == alone.row_dimensions[r].height

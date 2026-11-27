@@ -406,5 +406,8 @@ def import_xlsx(path: str, year: int | None = None,
                 md.meals.setdefault(day, {})[section] = _pad(items)
 
         if md.meals:
-            done.append((md.year, md.month, save_month(md, merge=True)))
+            n = save_month(md, merge=True)
+            # 배달 탭과 주방 탭이 한 파일에 같이 있으면 같은 달이 두 번 읽힌다 — 한 번만 보고한다
+            if not any((md.year, md.month) == (y, mo) for y, mo, _ in done):
+                done.append((md.year, md.month, n))
     return done

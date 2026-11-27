@@ -194,3 +194,12 @@ def test_날짜칸은_월일_형식도_일로_읽는다():
     assert history._cell_day("4 (1)") == 4
     assert history._cell_day(7) == 7
     assert history._cell_day("일요일") is None
+
+
+def test_배달과_주방이_한_파일에_있어도_한_달은_한_번만_센다(tmp_path):
+    p = tmp_path / "both.xlsx"
+    ex.save_xlsx(layouts.month_data_to_text(_june()), str(p),
+                 preset=ex.PRESET_BOTH, year=2026, month=6)
+    assert history.import_xlsx(str(p)) == [(2026, 6, 2)]
+    back = history.get_month(2026, 6)
+    assert back.get(29, "중식") == LUNCH and back.get(30, "석식") == DINNER30

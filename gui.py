@@ -636,8 +636,13 @@ class MenuPlannerApp:
             if path.lower().endswith(".txt"):
                 exporters.save_txt(self._grid_to_text(with_cycle=True), path)
             else:
+                # 보기 형식과 상관없이 한 파일에 배달 탭 + 주방 탭을 함께 저장한다
                 exporters.save_xlsx(self._grid_to_text(), path, title=f"{y}년 {m}월 식단표",
-                                    preset=self.var_preset.get(), year=y, month=m)
+                                    preset=exporters.PRESET_BOTH, year=y, month=m)
+                messagebox.showinfo(
+                    "저장 완료",
+                    f"저장했어요:\n{path}\n\n한 파일 안에 ‘배달’ 탭과 ‘주방’ 탭이 함께 들어 있어요.")
+                return
             messagebox.showinfo("저장 완료", f"저장했어요:\n{path}")
         except Exception as e:  # noqa: BLE001
             messagebox.showerror("오류", f"저장하지 못했어요.\n\n{e}")
