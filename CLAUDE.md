@@ -126,6 +126,17 @@ pytest tests/test_exporters.py -v
   `calc_row_height`). 열 너비·폰트로 줄 수를 추정해 `_MIN_ROW_PT`~`_MAX_ROW_PT`
   사이로 자른다. 머리글 행만 `DLV_ROW_H_HEAD` / `KIT_ROW_H_HEAD` 고정.
 
+## 날짜 옆 회전 번호 (1→2→3)
+
+- `layouts.cycle_number()` 한 곳에서만 계산한다. 기준은 `CYCLE_ANCHOR`(2026-12-01 = 1),
+  달·해가 바뀌어도 끊기지 않고 매일 1→2→3 으로 돈다. 주기를 바꾸려면 `CYCLE_LEN`.
+- 붙는 곳: 엑셀 날짜칸(`1 (1)`) · GUI 미리보기(달력형/주방형) · 과거 식단 창 ·
+  복사/인쇄/텍스트 저장(`12/1(화) (1): …`).
+- **표준 텍스트(검증·엑셀 저장·프롬프트용)에는 붙이지 않는다.** 사람이 보는 출력만
+  `month_data_to_text(md, with_cycle=True)` 를 쓴다. `LINE_RE` 와 `history._cell_day()` 는
+  번호가 붙은 형식도 읽으므로 내보낸 파일을 다시 가져와도 된다.
+- 메뉴 칸은 항목마다 한 줄(`"\n"`)이다. 사이에 빈 줄을 넣지 않는다.
+
 ## 주의
 
 - 규칙은 프롬프트(`SYSTEM_INSTRUCTION`)와 코드(`validate_menu`) 양쪽에 있음 — 한쪽만 고치지 말 것

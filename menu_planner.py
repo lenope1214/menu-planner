@@ -521,7 +521,9 @@ class MealLine:
     raw: str
 
 
-LINE_RE = re.compile(r"^(?P<date>\d{1,2}/\d{1,2}\([월화수목금토일]\)):\s*(?P<body>.+)$")
+# 날짜 뒤의 회전 번호 ' (1)' 은 있어도 되고 없어도 된다(표시용 텍스트를 다시 읽을 때 대비).
+LINE_RE = re.compile(
+    r"^(?P<date>\d{1,2}/\d{1,2}\([월화수목금토일]\))(?:\s*\(\d+\))?:\s*(?P<body>.+)$")
 
 
 def parse_menu_text(text: str) -> list[MealLine]:

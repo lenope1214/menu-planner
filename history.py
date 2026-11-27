@@ -334,6 +334,20 @@ def _ym_from_sheet(title: str) -> tuple[int, int] | None:
     return (2000 + y if y < 100 else y), mo
 
 
+def _cell_day(v) -> int | None:
+    """날짜 칸 값 → 1~31 일(day). 숫자이거나 '1 (1)'처럼 앞이 숫자인 문자열을 받는다."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)) and float(v).is_integer():
+        n = int(v)
+    elif isinstance(v, str):
+        m = re.match(r"\s*(\d{1,2})", v)
+        n = int(m.group(1)) if m else None
+    else:
+        n = None
+    return n if (n is not None and 1 <= n <= 31) else None
+
+
 def _cell_items(v) -> list[str]:
     """메뉴 칸('메인\n\n반찬\n\n…') → 항목 리스트. 안내문·빈칸은 걸러낸다."""
     if not isinstance(v, str):
@@ -373,10 +387,8 @@ def import_xlsx(path: str, year: int | None = None,
                     section = "석식"
                 continue
 
-            # 날짜 행: 1~31 정수가 여러 칸
-            nums = {i: int(v) for i, v in enumerate(vals)
-                    if isinstance(v, (int, float)) and float(v).is_integer()
-                    and 1 <= int(v) <= 31}
+            # 날짜 행: 1~31 정수가 여러 칸 (회전번호가 붙은 '1 (1)' 형식도 허용)
+            nums = {i: d for i, v in enumerate(vals) if (d := _cell_day(v)) is not None}
             if len(nums) >= 2:
                 days_by_col = nums
                 continue

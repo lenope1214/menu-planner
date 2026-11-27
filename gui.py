@@ -434,7 +434,8 @@ class MenuPlannerApp:
                         continue
                     cell = Frame(table, bg="white")
                     cell.grid(row=r, column=ci, sticky="nsew", padx=1, pady=1)
-                    Label(cell, text=str(day), font=self.f_grid, bg="white",
+                    Label(cell, text=layouts.day_with_cycle(md.year, md.month, day),
+                          font=self.f_grid, bg="white",
                           fg="#333", anchor="w").pack(fill="x", padx=2, pady=(2, 0))
                     items = md.get(day, section)
                     for idx in range(ITEMS_PER_MEAL):
@@ -459,7 +460,8 @@ class MenuPlannerApp:
                   relief="solid", bd=1).grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
             for ci, day in enumerate(week, start=1):
                 wd = WEEKDAYS_KR[ci - 1]
-                txt = f"{wd}요일 {day}일" if day else f"{wd}요일"
+                txt = (f"{wd}요일 {day}일 ({layouts.cycle_number(md.year, md.month, day)})"
+                       if day else f"{wd}요일")
                 Label(block, text=txt, font=self.f_grid, bg=C_LUNCH, width=12,
                       relief="solid", bd=1).grid(row=0, column=ci, sticky="nsew",
                                                  padx=1, pady=1)
@@ -494,9 +496,12 @@ class MenuPlannerApp:
             except Exception:
                 pass
 
-    def _grid_to_text(self) -> str:
+    def _grid_to_text(self, with_cycle: bool = False) -> str:
+        """with_cycle=True: 날짜 옆 회전 번호를 붙인 표시용(복사·인쇄·텍스트 저장)."""
         self._flush_cells()
-        return layouts.month_data_to_text(self.month_data) if self.month_data else ""
+        if not self.month_data:
+            return ""
+        return layouts.month_data_to_text(self.month_data, with_cycle=with_cycle)
 
     def _has_content(self) -> bool:
         if not self.month_data or self.month_data.is_empty():
@@ -620,11 +625,10 @@ class MenuPlannerApp:
         if not path:
             return
         try:
-            text = self._grid_to_text()
             if path.lower().endswith(".txt"):
-                exporters.save_txt(text, path)
+                exporters.save_txt(self._grid_to_text(with_cycle=True), path)
             else:
-                exporters.save_xlsx(text, path, title=f"{y}년 {m}월 식단표",
+                exporters.save_xlsx(self._grid_to_text(), path, title=f"{y}년 {m}월 식단표",
                                     preset=self.var_preset.get(), year=y, month=m)
             messagebox.showinfo("저장 완료", f"저장했어요:\n{path}")
         except Exception as e:  # noqa: BLE001
@@ -634,7 +638,7 @@ class MenuPlannerApp:
         if not self._has_content():
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(self._grid_to_text())
+        self.root.clipboard_append(self._grid_to_text(with_cycle=True))
         self.var_status.set("복사했어요! 카카오톡·문자 등에 붙여넣기(Ctrl+V) 하세요.")
 
     def on_print(self):
@@ -642,7 +646,7 @@ class MenuPlannerApp:
             return
         y, m = self.cur_year, self.cur_month
         try:
-            path = exporters.print_text(self._grid_to_text(), title=f"{y}년 {m}월 식단표")
+            path = exporters.print_text(self._grid_to_text(with_cycle=True), title=f"{y}년 {m}월 식단표")
             if sys.platform.startswith("win"):
                 self.var_status.set("프린터로 보냈어요. 인쇄 대화상자를 확인하세요.")
             else:

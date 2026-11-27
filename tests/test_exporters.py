@@ -12,6 +12,7 @@ from __future__ import annotations
 from openpyxl import load_workbook
 
 import exporters as ex
+import layouts
 from layouts import PRESET_CALENDAR, PRESET_KITCHEN
 from helpers import find_cell, line, text
 
@@ -36,10 +37,10 @@ def test_서식_수치를_지킨다():
     assert ex.KIT_ROW_H_HEAD == 33.75     # 주방 요일/날짜 행
 
 
-def test_메뉴_여섯개는_열한_줄로_본다():
-    """항목 6개 + 사이 빈 줄 5개 = 11줄. 이 너비에서는 접히지 않아야 한다."""
-    cell = "\n\n".join(MENU)
-    assert ex._cell_lines(cell, ex.MENU_COL_WIDTH, 26) == 11
+def test_메뉴_여섯개는_여섯_줄로_본다():
+    """항목 6개 = 6줄(사이 빈 줄 없음). 이 너비에서는 접히지 않아야 한다."""
+    cell = "\n".join(MENU)
+    assert ex._cell_lines(cell, ex.MENU_COL_WIDTH, 26) == 6
 
 
 def test_긴_메뉴명은_접힌_줄까지_센다():
@@ -51,7 +52,7 @@ def test_긴_메뉴명은_접힌_줄까지_센다():
 
 def test_행_높이는_줄_수에_비례하고_한계를_넘지_않는다():
     one = ex.calc_row_height(["제육볶음"], ex.MENU_COL_WIDTH, 26)
-    six = ex.calc_row_height(["\n\n".join(MENU)], ex.MENU_COL_WIDTH, 26)
+    six = ex.calc_row_height(["\n".join(MENU)], ex.MENU_COL_WIDTH, 26)
     assert six > one
     assert one >= ex._MIN_ROW_PT                       # 너무 납작해지지 않는다
     huge = ex.calc_row_height(["가" * 2000], ex.MENU_COL_WIDTH, 26)
@@ -81,7 +82,7 @@ def test_배달형_메뉴칸은_줄바꿈이_켜져_있다(tmp_path):
     cell = find_cell(ws, "제육볶음")
     assert cell is not None
     assert cell.alignment.wrap_text is True
-    assert cell.value == "\n\n".join(MENU)      # 항목 사이 빈 줄
+    assert cell.value == "\n".join(MENU)        # 항목마다 한 줄(사이 빈 줄 없음)
     assert ws.row_dimensions[cell.row].height == ex.calc_row_height(
         [cell.value], ex.MENU_COL_WIDTH, 26)
 
@@ -95,6 +96,36 @@ def test_배달형_요일머리글은_전체표기(tmp_path):
 def test_안내문이_들어간다(tmp_path):
     _wb, ws = _sheet(tmp_path, PRESET_CALENDAR)
     assert find_cell(ws, "※") is not None
+
+
+# ---- 날짜 옆 회전 번호(1→2→3) ----
+
+def test_회전번호는_2026년_12월_1일이_1이고_사흘마다_돈다():
+    assert [layouts.cycle_number(2026, 12, d) for d in (1, 2, 3, 4, 5, 6)] == [1, 2, 3, 1, 2, 3]
+    assert layouts.cycle_number(2026, 11, 30) == 3      # 기준일 앞으로도 이어진다
+    assert layouts.cycle_number(2027, 1, 1) == 2        # 달·해가 바뀌어도 끊기지 않는다
+    assert layouts.day_with_cycle(2026, 12, 4) == "4 (1)"
+
+
+def test_엑셀_날짜칸에_회전번호가_붙는다(tmp_path):
+    for preset in (PRESET_CALENDAR, PRESET_KITCHEN):
+        _wb, ws = _sheet(tmp_path, preset)
+        want = layouts.day_with_cycle(2026, 7, 1)
+        values = {c.value for row in ws.iter_rows() for c in row}
+        assert want in values, preset
+        assert 1 not in values, preset                   # 숫자만 든 날짜칸은 남지 않는다
+
+
+def test_텍스트_출력의_회전번호는_다시_읽어도_깨지지_않는다():
+    """복사·인쇄·텍스트 저장은 '7/1(수) (N): …' 로 나가고, 파서는 그 형식도 읽는다."""
+    md = layouts.build_month_data(SAMPLE, 2026, 7)
+    plain = layouts.month_data_to_text(md)
+    shown = layouts.month_data_to_text(md, with_cycle=True)
+    n = layouts.cycle_number(2026, 7, 1)
+    assert f"7/1(수) ({n}): 제육볶음" in shown
+    assert "(%d):" % n not in plain                       # 표준 텍스트는 그대로
+    back = layouts.build_month_data(shown, 2026, 7)
+    assert layouts.month_data_to_text(back) == plain
 
 
 # ---- 주방형(주간) ----

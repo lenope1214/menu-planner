@@ -41,6 +41,21 @@ WEEKDAYS_KR = ["일", "월", "화", "수", "목", "금", "토"]
 
 FOOTER_NOTE = "※ 본 식단은 산지 공급 및 주방 상황에 따라 일부 변경될 수 있음을 양해 부탁드립니다."
 
+# 날짜 옆 회전 번호(1→2→3→1...). 2026-12-01 을 (1) 기준으로 매일 순환한다.
+CYCLE_ANCHOR = datetime.date(2026, 12, 1)
+CYCLE_LEN = 3
+
+
+def cycle_number(year: int, month: int, day: int) -> int:
+    """해당 날짜의 회전 번호(1~CYCLE_LEN). 2026-12-01=1 기준 매일 1→2→3 반복."""
+    delta = (datetime.date(year, month, day) - CYCLE_ANCHOR).days
+    return delta % CYCLE_LEN + 1
+
+
+def day_with_cycle(year: int, month: int, day: int) -> str:
+    """날짜(일) 옆에 회전 번호를 붙인 표기. 예: '1 (1)'."""
+    return f"{day} ({cycle_number(year, month, day)})"
+
 _DATE_RE = re.compile(r"(\d{1,2})/(\d{1,2})\(([월화수목금토일])\)")
 
 
@@ -91,8 +106,12 @@ def build_month_data(text: str, year: int, month: int) -> MonthData:
     return md
 
 
-def month_data_to_text(md: MonthData) -> str:
-    """MonthData(편집 반영) -> 표준 식단표 텍스트(파서/검증/내보내기 호환)."""
+def month_data_to_text(md: MonthData, with_cycle: bool = False) -> str:
+    """MonthData(편집 반영) -> 표준 식단표 텍스트(파서/검증/내보내기 호환).
+
+    with_cycle=True 면 날짜 뒤에 회전 번호를 붙인다('12/1(화) (1): …').
+    복사·텍스트 저장·인쇄처럼 사람이 보는 출력에만 쓴다(파서는 이 형식도 읽는다).
+    """
     lines: list[str] = []
     for section in SECTIONS:
         days = [d for d in sorted(md.meals) if md.has_meal(d, section)]
@@ -102,7 +121,8 @@ def month_data_to_text(md: MonthData) -> str:
         for day in days:
             wd = weekday_of(md.year, md.month, day)
             items = md.get(day, section)
-            lines.append(f"{md.month}/{day}({wd}): " + ", ".join(items))
+            tag = f" ({cycle_number(md.year, md.month, day)})" if with_cycle else ""
+            lines.append(f"{md.month}/{day}({wd}){tag}: " + ", ".join(items))
     return "\n".join(lines)
 
 
