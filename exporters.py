@@ -237,7 +237,9 @@ def _delivery_section(ws, md, section, weeks, r):
     # 주별: 날짜행 + 메뉴행
     for week in weeks:
         for ci, day in enumerate(week, start=1):
-            _set(ws, r, ci, (layouts.date_with_cycle(md.year, md.month, day) if day else None),
+            # 날짜칸은 숫자만 — 가게의 주방 시트가 INDIRECT 로 이 값을 끌어다 쓰고,
+            # 회전 번호 (1)(2)(3) 은 주방 쪽에서만 붙인다.
+            _set(ws, r, ci, (day or None),
                  font=FONT_BODY, size=29, bold=True,
                  fill=(GRAY if day else TEAL), valign=None)
         ws.row_dimensions[r].height = DLV_ROW_H_HEAD

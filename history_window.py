@@ -150,9 +150,8 @@ class HistoryWindow:
             r = day + 1
             wd = layouts.weekday_of(self.year, self.month, day)
             weekend = wd in ("토", "일")
-            cyc = layouts.cycle_number(self.year, self.month, day)
-            Label(self.grid_inner, text=f"{day}일({wd}) ({cyc})", font=_f(11, True),
-                  bg=(C_WEEKEND if weekend else "#FAFAFA"), width=11,
+            Label(self.grid_inner, text=f"{day}일({wd})", font=_f(11, True),
+                  bg=(C_WEEKEND if weekend else "#FAFAFA"), width=8,
                   relief="solid", bd=1).grid(row=r, column=0, sticky="nsew")
             for si, section in enumerate(SECTIONS):
                 items = md.get(day, section) if md.has_meal(day, section) \

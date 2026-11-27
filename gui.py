@@ -434,7 +434,7 @@ class MenuPlannerApp:
                         continue
                     cell = Frame(table, bg="white")
                     cell.grid(row=r, column=ci, sticky="nsew", padx=1, pady=1)
-                    Label(cell, text=layouts.day_with_cycle(md.year, md.month, day),
+                    Label(cell, text=str(day),      # 배달용은 날짜만(회전 번호는 주방용에만)
                           font=self.f_grid, bg="white",
                           fg="#333", anchor="w").pack(fill="x", padx=2, pady=(2, 0))
                     items = md.get(day, section)
@@ -497,11 +497,15 @@ class MenuPlannerApp:
                 pass
 
     def _grid_to_text(self, with_cycle: bool = False) -> str:
-        """with_cycle=True: 날짜 옆 회전 번호를 붙인 표시용(복사·인쇄·텍스트 저장)."""
+        """with_cycle=True: 사람이 보는 출력(복사·인쇄·텍스트 저장).
+
+        회전 번호 (1)(2)(3) 은 주방용 보기일 때만 붙인다. 배달용에는 넣지 않는다.
+        """
         self._flush_cells()
         if not self.month_data:
             return ""
-        return layouts.month_data_to_text(self.month_data, with_cycle=with_cycle)
+        kitchen = self.var_preset.get() == layouts.PRESET_KITCHEN
+        return layouts.month_data_to_text(self.month_data, with_cycle=with_cycle and kitchen)
 
     def _has_content(self) -> bool:
         if not self.month_data or self.month_data.is_empty():

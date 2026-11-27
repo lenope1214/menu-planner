@@ -115,13 +115,18 @@ def test_회전번호는_2026년_12월_1일이_1이고_사흘마다_돈다():
     assert layouts.date_with_cycle(2026, 12, 4) == "12/4 (1)"
 
 
-def test_엑셀_날짜칸에_회전번호가_붙는다(tmp_path):
-    for preset in (PRESET_CALENDAR, PRESET_KITCHEN):
-        _wb, ws = _sheet(tmp_path, preset)
-        n = layouts.cycle_number(2026, 7, 1)
-        values = {c.value for row in ws.iter_rows() for c in row}
-        assert f"7/1 ({n})" in values, preset            # 월/일 (번호)
-        assert 1 not in values, preset                   # 숫자만 든 날짜칸은 남지 않는다
+def test_회전번호는_주방용_엑셀에만_붙는다(tmp_path):
+    n = layouts.cycle_number(2026, 7, 1)
+    _wb, ws = _sheet(tmp_path, PRESET_KITCHEN)
+    values = {c.value for row in ws.iter_rows() for c in row}
+    assert f"7/1 ({n})" in values and 1 not in values     # 주방용: 월/일 (번호)
+
+    # 배달용 날짜칸은 원본처럼 숫자만 — 가게 주방 시트가 INDIRECT 로 이 숫자를 끌어다 쓴다
+    _wb, ws = _sheet(tmp_path, PRESET_CALENDAR)
+    dates = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, int)]
+    assert sorted(set(dates)) == list(range(1, 32))
+    assert not any(isinstance(c.value, str) and "(1)" in c.value and "/" in c.value
+                   for row in ws.iter_rows() for c in row)
 
 
 def test_텍스트_출력의_회전번호는_다시_읽어도_깨지지_않는다():
