@@ -13,7 +13,8 @@
 
 ⚠ 아래 수치는 실제 운영 파일 '식단표_EXCEL/7월식단표.xlsx' 의 시트
    '배달-26.07' / '주방-26.07' 에서 그대로 뽑은 값이다(모든 월 시트가 동일).
-   메뉴 글자가 잘리지 않는 건 '열 너비'가 전적으로 결정하므로 임의로 줄이지 말 것.
+   열 너비(배달 A~G 31.38 / 주방 B~H 25.13)·메뉴 행 높이(337.5 / 311.25)·
+   메뉴 사이 빈 줄까지 원본과 같아야 한다. 임의로 바꾸지 말 것.
 """
 
 from __future__ import annotations
@@ -50,18 +51,24 @@ WD = [w + "요일" for w in WEEKDAYS_KR]
 DEFAULT_COL_W = 12.63
 DEFAULT_ROW_H = 15.75
 
-# 제목/요일/날짜 등 머리글 행 높이(메뉴 행은 내용에 맞춰 계산한다)
+# 행 높이 — 원본 시트 값 그대로(모든 월 시트 동일)
 DLV_ROW_H_HEAD = 37.5     # 배달형: 제목/요일/날짜 행
+DLV_ROW_H_MENU = 337.5    # 배달형: 메뉴 행
 KIT_ROW_H_HEAD = 33.75    # 주방형: 요일/날짜 행
+KIT_ROW_H_MENU = 311.25   # 주방형: 메뉴 행
 
-# 메뉴 열 너비(엑셀 단위). 기존 13 → 넓혀서 줄바꿈/행높이를 줄인다.
-# (넓혀서 종이 폭을 넘어도 _page 의 fitToWidth 로 인쇄는 1페이지 폭에 맞춰짐)
-MENU_COL_WIDTH = 26.0
+# 열 너비 — 원본 시트 값 그대로.
+# 원본 xlsx 는 '<col min=1 max=7 width=31.38>' 처럼 여러 열을 한 덩어리로 적어서
+# openpyxl 로 읽으면 첫 열(A 또는 B)에만 값이 보인다. 나머지 열도 같은 너비다.
+DLV_COL_W = 31.38         # 배달형 A~G
+KIT_COL_W = 25.13         # 주방형 B~H ('구분' 열 A 는 시트 기본 너비)
 
-# ---- 행 높이 자동 계산 파라미터 ----
-_LINE_RATIO = 1.35     # 한 줄 높이 ≈ 폰트pt × 이 비율(줄간격 포함)
-_ROW_PAD_PT = 16       # 셀 위/아래 여백(pt)
-_MIN_ROW_PT = 120      # 최소 행 높이(pt)
+# 메뉴 칸: 항목 사이에 빈 줄 한 칸(원본과 같은 모양). 6개 = 11줄.
+MENU_SEP = "\n\n"
+MENU_BASE_LINES = 11
+
+# ---- 긴 메뉴명으로 줄이 접혔을 때만 행을 키우는 파라미터 ----
+_LINE_RATIO = 1.35     # 접힌 한 줄당 추가 높이 ≈ 폰트pt × 이 비율
 _MAX_ROW_PT = 620      # 최대 행 높이(pt) — 과도한 줄바꿈 방지 클램프
 _COL_PX_PER_UNIT = 7.0     # 엑셀 열너비 1 ≈ 7px(기본 폰트 문자폭)
 _COL_PX_PAD = 5.0          # 열 좌우 여백(px)
@@ -93,11 +100,15 @@ def _cell_lines(text: str, col_width: float, font_size: int) -> int:
     return lines
 
 
-def calc_row_height(texts, col_width: float, font_size: int) -> float:
-    """한 행의 여러 셀 중 가장 높은 셀 기준으로 행 높이(pt)를 계산."""
+def calc_row_height(texts, col_width: float, font_size: int, base_h: float) -> float:
+    """메뉴 행 높이(pt). 평소엔 원본 높이(base_h) 그대로.
+
+    메뉴명이 길어 줄이 접힌 칸이 있으면(기본 11줄 초과) 접힌 줄 수만큼만 키운다.
+    """
     lines = max((_cell_lines(t or "", col_width, font_size) for t in texts), default=1)
-    h = lines * font_size * _LINE_RATIO + _ROW_PAD_PT
-    return round(max(_MIN_ROW_PT, min(_MAX_ROW_PT, h)), 1)
+    extra = max(0, lines - MENU_BASE_LINES)
+    h = base_h + extra * font_size * _LINE_RATIO
+    return round(min(max(_MAX_ROW_PT, base_h), h), 2)
 
 
 def save_txt(text: str, path: str) -> None:
@@ -197,7 +208,7 @@ def _page(ws, landscape):
 def _xlsx_delivery(wb, md: MonthData) -> None:
     ws = wb.create_sheet(f"배달-{md.year % 100:02d}.{md.month:02d}")
     for c in "ABCDEFG":  # 요일 7칸 균일하게 넓힘
-        ws.column_dimensions[c].width = MENU_COL_WIDTH
+        ws.column_dimensions[c].width = DLV_COL_W
     _page(ws, landscape=False)
 
     weeks = calendar_weeks(md.year, md.month)
@@ -228,19 +239,19 @@ def _delivery_section(ws, md, section, weeks, r):
         for ci, day in enumerate(week, start=1):
             _set(ws, r, ci, (layouts.date_with_cycle(md.year, md.month, day) if day else None),
                  font=FONT_BODY, size=29, bold=True,
-                 fill=(GRAY if day else TEAL), valign="center")
+                 fill=(GRAY if day else TEAL), valign=None)
         ws.row_dimensions[r].height = DLV_ROW_H_HEAD
         vals = []
         for ci, day in enumerate(week, start=1):
             has = day and md.has_meal(day, section)
             items = md.get(day, section) if has else []
-            val = "\n".join(items) if has else None
+            val = MENU_SEP.join(items) if has else None
             # wrap=True 여야 엑셀이 셀 안의 줄바꿈을 그대로 보여준다.
             _set(ws, r + 1, ci, val, font=FONT_BODY, size=26,
                  fill=(menu_fill if day else TEAL), valign="top", wrap=True)
             vals.append(val)
-        # 넓힌 메뉴 열 너비 기준으로 내용에 맞춰 행 높이 계산
-        ws.row_dimensions[r + 1].height = calc_row_height(vals, MENU_COL_WIDTH, 26)
+        # 원본 높이 그대로, 긴 메뉴명으로 줄이 접힌 주만 그만큼 키운다
+        ws.row_dimensions[r + 1].height = calc_row_height(vals, DLV_COL_W, 26, DLV_ROW_H_MENU)
         r += 2
 
     # 안내문 (3행 병합, Arial 29 굵게, 정렬 일반=왼쪽)
@@ -254,9 +265,9 @@ def _delivery_section(ws, md, section, weeks, r):
 # ---- 주방형: 가로 A4, 주 단위 4행 블록 ----
 def _xlsx_kitchen(wb, md: MonthData) -> None:
     ws = wb.create_sheet(f"주방-{md.year % 100:02d}.{md.month:02d}")
-    ws.column_dimensions["A"].width = 13.0        # '구분' 라벨 열
+    ws.column_dimensions["A"].width = DEFAULT_COL_W   # '구분' 라벨 열(원본은 기본 너비)
     for c in "BCDEFGH":                            # 요일 7칸 균일하게 넓힘
-        ws.column_dimensions[c].width = MENU_COL_WIDTH
+        ws.column_dimensions[c].width = KIT_COL_W
     _page(ws, landscape=True)
 
     weeks = calendar_weeks(md.year, md.month)
@@ -286,12 +297,12 @@ def _xlsx_kitchen(wb, md: MonthData) -> None:
             for ci, day in enumerate(week):
                 has = day and md.has_meal(day, section)
                 items = md.get(day, section) if has else []
-                val = "\n".join(items) if has else None
+                val = MENU_SEP.join(items) if has else None
                 _set(ws, rr, ci + 2, val, font=FONT_BODY, size=24, fill=GRAY,
                      valign="top", wrap=True)
                 vals.append(val)
-            # 넓힌 메뉴 열 너비 기준으로 내용에 맞춰 행 높이 계산
-            ws.row_dimensions[rr].height = calc_row_height(vals, MENU_COL_WIDTH, 24)
+            # 원본 높이 그대로, 긴 메뉴명으로 줄이 접힌 주만 그만큼 키운다
+            ws.row_dimensions[rr].height = calc_row_height(vals, KIT_COL_W, 24, KIT_ROW_H_MENU)
         r += 4
 
 
